@@ -102,7 +102,8 @@ th,td {
 <button onclick="mostrar('inicio')">Inicio</button>
 <button onclick="mostrar('proveedores')">Proveedores</button>
 <button onclick="mostrar('materias')">Materias primas</button>
-<button onclick="mostrar('rentabilidad')">Rentabilidad</button>
+ <button onclick="mostrar('recetas')">Recetas</button>
+ <button onclick="mostrar('rentabilidad')">Rentabilidad</button>
   <button onclick="salir()">Salir</button>
 </nav>
 
@@ -110,6 +111,26 @@ th,td {
 <h2>Panel principal</h2>
 <p>Bienvenido a Costos EPA.</p>
 <p>Administración de compras y materias primas.</p>
+</div>
+
+<div id="recetas" class="card oculto">
+  <h2>Recetas</h2>
+  <p>Administración de recetas y costos.</p>
+
+  <h3>Recetas registradas</h3>
+  <div class="tabla">
+    <table>
+      <thead>
+        <tr>
+          <th>Receta</th>
+          <th>Rendimiento</th>
+          <th>Costo total</th>
+          <th>Costo por unidad</th>
+        </tr>
+      </thead>
+      <tbody id="listaRecetas"></tbody>
+    </table>
+  </div>
 </div>
 
 <div id="proveedores" class="card oculto">
@@ -216,15 +237,16 @@ function mensaje(texto, error=false) {
 }
 
 function mostrar(seccion) {
-["inicio","proveedores","materias","rentabilidad"].forEach(id => {
+["inicio","proveedores","materias","recetas","rentabilidad"].forEach(id => {
     document.getElementById(id).classList.toggle(
       "oculto", id !== seccion
     );
   });
 
   if (seccion === "proveedores") cargarProveedores();
-  if (seccion === "materias") cargarMaterias();
-  if (seccion === "rentabilidad") cargarRentabilidad();
+if (seccion === "materias") cargarMaterias();
+if (seccion === "recetas") cargarRecetas();
+if (seccion === "rentabilidad") cargarRentabilidad();
 }
 
 async function ingresar() {
@@ -489,6 +511,54 @@ async function cargarRentabilidad() {
 
     tbody.appendChild(fila);
   });
+}
+
+async function cargarRecetas() {
+  const { data, error } = await db
+    .from("recetas")
+    .select("id, nombre, rendimiento, unidad_rendimiento")
+    .order("nombre");
+
+  if (error) {
+    mensaje("Error: " + error.message, true);
+    return;
+  }
+
+  const tbody = document.getElementById("listaRecetas");
+  tbody.replaceChildren();
+
+  for (const receta of data) {
+    const resultado = await db.rpc("calcular_costo_receta", {
+      p_receta_id: receta.id
+    });
+
+    if (resultado.error) {
+      mensaje("Error: " + resultado.error.message, true);
+      return;
+    }
+
+    const costo = Number(resultado.data);
+    const unitario = receta.rendimiento > 0
+      ? costo / receta.rendimiento
+      : null;
+
+    const fila = document.createElement("tr");
+
+    [
+      receta.nombre,
+      receta.rendimiento + " " + receta.unidad_rendimiento,
+      "$ " + costo.toLocaleString("es-AR"),
+      unitario === null
+        ? "—"
+        : "$ " + unitario.toLocaleString("es-AR")
+    ].forEach(valor => {
+      const celda = document.createElement("td");
+      celda.textContent = valor;
+      fila.appendChild(celda);
+    });
+
+    tbody.appendChild(fila);
+  }
 }
 
 // Recuperar la sesión al abrir la aplicación
