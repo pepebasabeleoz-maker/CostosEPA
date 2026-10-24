@@ -1,0 +1,447 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Costos EPA</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root {
+  --azul:#19334b;
+  --verde:#23856b;
+  --fondo:#f3f5f7;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0;
+  font-family:Arial,sans-serif;
+  background:var(--fondo);
+  color:#253442;
+}
+header {
+  background:var(--azul);
+  color:white;
+  padding:20px;
+}
+header h1 { margin:0; }
+header p { margin:6px 0 0; }
+main {
+  max-width:1100px;
+  margin:auto;
+  padding:20px;
+}
+.card {
+  background:white;
+  border-radius:12px;
+  padding:22px;
+  margin-bottom:18px;
+  box-shadow:0 2px 8px #00000012;
+}
+input,select,button {
+  padding:12px;
+  margin:5px 0;
+  border-radius:7px;
+  border:1px solid #ccd3d9;
+  font-size:15px;
+}
+input,select { width:100%; }
+button {
+  background:var(--verde);
+  color:white;
+  border:0;
+  cursor:pointer;
+}
+button:hover { opacity:.9; }
+nav {
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:20px;
+}
+nav button { background:var(--azul); }
+.oculto { display:none; }
+.fila {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:10px;
+}
+table {
+  width:100%;
+  border-collapse:collapse;
+}
+th,td {
+  text-align:left;
+  padding:10px;
+  border-bottom:1px solid #ddd;
+}
+.tabla { overflow-x:auto; }
+.error { color:#b42318; }
+.exito { color:#16805d; }
+</style>
+</head>
+<body>
+
+<header>
+<h1>Costos EPA</h1>
+<p>El Pastelero Artesanal</p>
+</header>
+
+<main>
+
+<section id="login" class="card">
+<h2>Ingresar al sistema</h2>
+<input id="email" type="email" placeholder="Correo electrónico">
+<input id="password" type="password" placeholder="Contraseña">
+<button onclick="ingresar()">Ingresar</button>
+<p id="mensajeLogin"></p>
+</section>
+
+<section id="sistema" class="oculto">
+<nav>
+<button onclick="mostrar('inicio')">Inicio</button>
+<button onclick="mostrar('proveedores')">Proveedores</button>
+<button onclick="mostrar('materias')">Materias primas</button>
+<button onclick="salir()">Salir</button>
+</nav>
+
+<div id="inicio" class="card">
+<h2>Panel principal</h2>
+<p>Bienvenido a Costos EPA.</p>
+<p>Administración de compras y materias primas.</p>
+</div>
+
+<div id="proveedores" class="card oculto">
+<h2>Proveedores</h2>
+<form id="formProveedor">
+<input id="provNombre" placeholder="Nombre del proveedor" required>
+<input id="provCuit" placeholder="CUIT">
+<input id="provTelefono" placeholder="Teléfono">
+<input id="provEmail" type="email" placeholder="Email">
+<button type="submit">Guardar proveedor</button>
+</form>
+<h3>Proveedores registrados</h3>
+<div class="tabla">
+<table>
+<thead>
+<tr>
+<th>Nombre</th>
+<th>CUIT</th>
+<th>Teléfono</th>
+<th>Acciones</th>
+</tr>
+</thead>
+<tbody id="listaProveedores"></tbody>
+</table>
+</div>
+</div>
+
+<div id="materias" class="card oculto">
+<h2>Materias primas</h2>
+<form id="formMateria">
+<input id="matNombre" placeholder="Nombre del ingrediente" required>
+<div class="fila">
+<select id="matUnidad">
+<option value="kg">Kilogramos</option>
+<option value="g">Gramos</option>
+<option value="l">Litros</option>
+<option value="ml">Mililitros</option>
+<option value="unidad">Unidades</option>
+</select>
+<input id="matCosto" type="number" min="0"
+step="0.0001" placeholder="Costo por unidad base" required>
+<input id="matStock" type="number" min="0"
+step="0.001" placeholder="Stock inicial" required>
+</div>
+<button type="submit">Guardar materia prima</button>
+</form>
+<h3>Materias primas registradas</h3>
+<div class="tabla">
+<table>
+<thead>
+<tr>
+<th>Ingrediente</th>
+<th>Unidad</th>
+<th>Costo</th>
+<th>Stock</th>
+<th>Acciones</th>
+</tr>
+</thead>
+<tbody id="listaMaterias"></tbody>
+</table>
+</div>
+</div>
+
+<p id="estado"></p>
+</section>
+</main>
+
+<script>
+const SUPABASE_URL =
+"https://chpltbsenrunkfwqhgic.supabase.co";
+
+const SUPABASE_KEY =
+"sb_publishable_UpL5cXP2j2s7ICY7mkLhiw_kQ6XMKCF";
+
+const db = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
+
+function mensaje(texto, error=false) {
+  const elemento = document.getElementById("estado");
+  elemento.textContent = texto;
+  elemento.className = error ? "error" : "exito";
+}
+
+function mostrar(seccion) {
+  ["inicio","proveedores","materias"].forEach(id => {
+    document.getElementById(id).classList.toggle(
+      "oculto", id !== seccion
+    );
+  });
+  if (seccion === "proveedores") cargarProveedores();
+  if (seccion === "materias") cargarMaterias();
+}
+
+async function ingresar() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  const aviso = document.getElementById("mensajeLogin");
+
+  aviso.textContent = "Ingresando...";
+
+  const { data, error } = await db.auth.signInWithPassword({
+    email,
+    password
+  });
+
+  if (error) {
+    aviso.textContent = "Error: " + error.message;
+    return;
+  }
+
+  if (data.session) {
+    await verificarAcceso();
+  }
+}
+
+async function verificarAcceso() {
+  const { data: usuario } = await db.auth.getUser();
+
+  if (!usuario.user) {
+    document.getElementById("login").classList.remove("oculto");
+    document.getElementById("sistema").classList.add("oculto");
+    return;
+  }
+
+  const { data, error } = await db.rpc("es_administrador");
+
+  if (error || data !== true) {
+    await db.auth.signOut();
+    document.getElementById("mensajeLogin").textContent =
+      "Usuario sin autorización para Costos EPA.";
+    return;
+  }
+
+  document.getElementById("login").classList.add("oculto");
+  document.getElementById("sistema").classList.remove("oculto");
+  mostrar("inicio");
+}
+
+async function salir() {
+  await db.auth.signOut();
+  document.getElementById("sistema").classList.add("oculto");
+  document.getElementById("login").classList.remove("oculto");
+  document.getElementById("password").value = "";
+}
+
+async function cargarProveedores() {
+  const { data, error } = await db
+    .from("proveedores")
+    .select("*")
+    .order("nombre");
+
+  if (error) {
+    mensaje(error.message, true);
+    return;
+  }
+
+  const tbody = document.getElementById("listaProveedores");
+  tbody.replaceChildren();
+
+  data.forEach(p => {
+    const fila = document.createElement("tr");
+
+    [p.nombre, p.cuit, p.telefono].forEach(valor => {
+      const celda = document.createElement("td");
+      celda.textContent = valor ?? "";
+      fila.appendChild(celda);
+    });
+
+    const celdaAcciones = document.createElement("td");
+    const boton = document.createElement("button");
+    boton.textContent = "Eliminar";
+    boton.onclick = () => eliminarProveedor(p.id);
+    celdaAcciones.appendChild(boton);
+    fila.appendChild(celdaAcciones);
+
+    tbody.appendChild(fila);
+  });
+}
+
+document.getElementById("formProveedor")
+.addEventListener("submit", async function(evento) {
+  evento.preventDefault();
+
+  const proveedor = {
+    nombre: document.getElementById("provNombre").value.trim(),
+    cuit: document.getElementById("provCuit").value.trim() || null,
+    telefono: document.getElementById("provTelefono").value.trim(),
+    email: document.getElementById("provEmail").value.trim()
+  };
+
+  const { error } = await db
+    .from("proveedores")
+    .insert(proveedor);
+
+  if (error) {
+    mensaje("Error: " + error.message, true);
+    return;
+  }
+
+  this.reset();
+  mensaje("Proveedor guardado correctamente.");
+  await cargarProveedores();
+});
+
+async function eliminarProveedor(id) {
+  if (!confirm("¿Eliminar este proveedor?")) return;
+
+  const { error } = await db
+    .from("proveedores")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    mensaje("No se pudo eliminar: " + error.message, true);
+    return;
+  }
+
+  mensaje("Proveedor eliminado.");
+  await cargarProveedores();
+}
+
+async function cargarMaterias() {
+  const { data, error } = await db
+    .from("materias_primas")
+    .select("*")
+    .order("nombre");
+
+  if (error) {
+    mensaje("Error: " + error.message, true);
+    return;
+  }
+
+  const tbody = document.getElementById("listaMaterias");
+  tbody.replaceChildren();
+
+  data.forEach(m => {
+    const fila = document.createElement("tr");
+
+    [
+      m.nombre,
+      m.unidad_base,
+      Number(m.costo_unitario).toLocaleString("es-AR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4
+      }),
+      Number(m.stock_actual).toLocaleString("es-AR")
+    ].forEach(valor => {
+      const celda = document.createElement("td");
+      celda.textContent = valor;
+      fila.appendChild(celda);
+    });
+
+    const celdaAcciones = document.createElement("td");
+    const boton = document.createElement("button");
+    boton.textContent = "Eliminar";
+    boton.onclick = () => eliminarMateria(m.id);
+
+    celdaAcciones.appendChild(boton);
+    fila.appendChild(celdaAcciones);
+    tbody.appendChild(fila);
+  });
+}
+
+document.getElementById("formMateria")
+.addEventListener("submit", async function(evento) {
+  evento.preventDefault();
+
+  const materia = {
+    nombre: document.getElementById("matNombre").value.trim(),
+    unidad_base: document.getElementById("matUnidad").value,
+    costo_unitario: Number(
+      document.getElementById("matCosto").value
+    ),
+    stock_actual: Number(
+      document.getElementById("matStock").value
+    )
+  };
+
+  if (!materia.nombre) {
+    mensaje("Ingresá el nombre del ingrediente.", true);
+    return;
+  }
+
+  const { error } = await db
+    .from("materias_primas")
+    .insert(materia);
+
+  if (error) {
+    mensaje("Error: " + error.message, true);
+    return;
+  }
+
+  this.reset();
+  mensaje("Materia prima guardada correctamente.");
+  await cargarMaterias();
+});
+
+async function eliminarMateria(id) {
+  if (!confirm("¿Eliminar esta materia prima?")) return;
+
+  const { error } = await db
+    .from("materias_primas")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    mensaje("No se pudo eliminar: " + error.message, true);
+    return;
+  }
+
+  mensaje("Materia prima eliminada.");
+  await cargarMaterias();
+}
+
+// Recuperar la sesión al abrir la aplicación
+async function iniciarAplicacion() {
+  const { data, error } = await db.auth.getSession();
+
+  if (error) {
+    document.getElementById("mensajeLogin").textContent =
+      error.message;
+    return;
+  }
+
+  if (data.session) {
+    await verificarAcceso();
+  }
+}
+
+iniciarAplicacion();
+
+</script>
+</body>
+</html>
