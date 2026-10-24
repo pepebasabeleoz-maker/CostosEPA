@@ -102,7 +102,8 @@ th,td {
 <button onclick="mostrar('inicio')">Inicio</button>
 <button onclick="mostrar('proveedores')">Proveedores</button>
 <button onclick="mostrar('materias')">Materias primas</button>
-<button onclick="salir()">Salir</button>
+<button onclick="mostrar('rentabilidad')">Rentabilidad</button>
+  <button onclick="salir()">Salir</button>
 </nav>
 
 <div id="inicio" class="card">
@@ -172,6 +173,26 @@ step="0.001" placeholder="Stock inicial" required>
 </div>
 </div>
 
+<div id="rentabilidad" class="card oculto">
+  <h2>Rentabilidad de productos</h2>
+  <p>Costos, precios de venta y márgenes de ganancia.</p>
+
+  <div class="tabla">
+    <table>
+      <thead>
+        <tr>
+          <th>Producto</th>
+          <th>Precio de venta</th>
+          <th>Costo unitario</th>
+          <th>Ganancia</th>
+          <th>Margen %</th>
+        </tr>
+      </thead>
+      <tbody id="listaRentabilidad"></tbody>
+    </table>
+  </div>
+</div>
+
 <p id="estado"></p>
 </section>
 </main>
@@ -195,16 +216,19 @@ function mensaje(texto, error=false) {
 }
 
 function mostrar(seccion) {
-  ["inicio","proveedores","materias"].forEach(id => {
+["inicio","proveedores","materias","rentabilidad"].forEach(id => {
     document.getElementById(id).classList.toggle(
       "oculto", id !== seccion
     );
   });
+
   if (seccion === "proveedores") cargarProveedores();
   if (seccion === "materias") cargarMaterias();
+  if (seccion === "rentabilidad") cargarRentabilidad();
 }
 
 async function ingresar() {
+
   const email = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
   const aviso = document.getElementById("mensajeLogin");
@@ -423,6 +447,48 @@ async function eliminarMateria(id) {
 
   mensaje("Materia prima eliminada.");
   await cargarMaterias();
+}
+
+async function cargarRentabilidad() {
+  const { data, error } = await db
+    .from("rentabilidad_productos")
+    .select("*")
+    .order("producto");
+
+  if (error) {
+    mensaje("Error: " + error.message, true);
+    return;
+  }
+
+  const tbody = document.getElementById("listaRentabilidad");
+  tbody.replaceChildren();
+
+  const dinero = valor =>
+    valor == null ? "—" :
+    "$ " + Number(valor).toLocaleString("es-AR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+
+  data.forEach(p => {
+    const fila = document.createElement("tr");
+
+    [
+      p.producto,
+      dinero(p.precio_venta),
+      dinero(p.costo_unitario),
+      dinero(p.ganancia_unitaria),
+      p.margen_porcentaje == null
+        ? "—"
+        : p.margen_porcentaje + " %"
+    ].forEach(valor => {
+      const celda = document.createElement("td");
+      celda.textContent = valor;
+      fila.appendChild(celda);
+    });
+
+    tbody.appendChild(fila);
+  });
 }
 
 // Recuperar la sesión al abrir la aplicación
