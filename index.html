@@ -117,6 +117,28 @@ th,td {
   <h2>Recetas</h2>
   <p>Administración de recetas y costos.</p>
 
+<h3>Nueva receta</h3>
+<form id="formReceta">
+  <input id="recNombre"
+         placeholder="Nombre de la receta"
+         required>
+
+  <input id="recRendimiento"
+         type="number"
+         min="0.001"
+         step="0.001"
+         placeholder="Cantidad producida"
+         required>
+
+  <select id="recUnidad">
+    <option value="unidades">Unidades</option>
+    <option value="kg">Kilogramos</option>
+    <option value="g">Gramos</option>
+  </select>
+
+  <button type="submit">Guardar receta</button>
+</form>
+
   <h3>Recetas registradas</h3>
   <div class="tabla">
     <table>
@@ -575,6 +597,32 @@ async function iniciarAplicacion() {
     await verificarAcceso();
   }
 }
+
+document.getElementById("formReceta")
+.addEventListener("submit", async function(evento) {
+  evento.preventDefault();
+
+  const receta = {
+    nombre: document.getElementById("recNombre").value.trim(),
+    rendimiento: Number(
+      document.getElementById("recRendimiento").value
+    ),
+    unidad_rendimiento: document.getElementById("recUnidad").value
+  };
+
+  const { error } = await db
+    .from("recetas")
+    .insert(receta);
+
+  if (error) {
+    mensaje("Error al guardar receta: " + error.message, true);
+    return;
+  }
+
+  this.reset();
+  mensaje("Receta guardada correctamente.");
+  await cargarRecetas();
+});
 
 iniciarAplicacion();
 
