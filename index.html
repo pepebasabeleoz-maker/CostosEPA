@@ -139,6 +139,25 @@ th,td {
   <button type="submit">Guardar receta</button>
 </form>
 
+<h3>Agregar ingrediente a una receta</h3>
+<form id="formIngredienteReceta">
+  <label>Receta</label>
+  <select id="ingReceta" required></select>
+
+  <label>Materia prima</label>
+  <select id="ingMateria" required></select>
+
+  <label>Cantidad utilizada</label>
+  <input id="ingCantidad"
+         type="number"
+         min="0.0001"
+         step="0.0001"
+         placeholder="Cantidad en la unidad base"
+         required>
+
+  <button type="submit">Agregar ingrediente</button>
+</form>
+
   <h3>Recetas registradas</h3>
   <div class="tabla">
     <table>
@@ -267,7 +286,10 @@ function mostrar(seccion) {
 
   if (seccion === "proveedores") cargarProveedores();
 if (seccion === "materias") cargarMaterias();
-if (seccion === "recetas") cargarRecetas();
+if (seccion === "recetas") {
+  cargarRecetas();
+  cargarOpcionesIngredientes();
+}
 if (seccion === "rentabilidad") cargarRentabilidad();
 }
 
@@ -621,6 +643,76 @@ document.getElementById("formReceta")
 
   this.reset();
   mensaje("Receta guardada correctamente.");
+  await cargarRecetas();
+});
+
+async function cargarOpcionesIngredientes() {
+  const { data: recetas, error: errorRecetas } = await db
+    .from("recetas")
+    .select("id, nombre")
+    .order("nombre");
+
+  const { data: materias, error: errorMaterias } = await db
+    .from("materias_primas")
+    .select("id, nombre, unidad_base")
+    .order("nombre");
+
+  if (errorRecetas || errorMaterias) {
+    mensaje("Error al cargar ingredientes: " +
+      (errorRecetas || errorMaterias).message, true);
+    return;
+  }
+
+  const selectorRecetas = document.getElementById("ingReceta");
+  const selectorMaterias = document.getElementById("ingMateria");
+
+  selectorRecetas.replaceChildren();
+  selectorMaterias.replaceChildren();
+
+  recetas.forEach(receta => {
+    const opcion = document.createElement("option");
+    opcion.value = receta.id;
+    opcion.textContent = receta.nombre;
+    selectorRecetas.appendChild(opcion);
+  });
+
+  materias.forEach(materia => {
+    const opcion = document.createElement("option");
+    opcion.value = materia.id;
+    opcion.textContent =
+      materia.nombre + " (" + materia.unidad_base + ")";
+    selectorMaterias.appendChild(opcion);
+  });
+}
+
+document.getElementById("formIngredienteReceta")
+.addEventListener("submit", async function(evento) {
+  evento.preventDefault();
+
+  const ingrediente = {
+    receta_id: Number(document.getElementById("ingReceta").value),
+    materia_prima_id: Number(document.getElementById("ingMateria").value),
+    cantidad: Number(document.getElementById("ingCantidad").value)
+  };
+
+  if (!ingrediente.receta_id ||
+      !ingrediente.materia_prima_id ||
+      ingrediente.cantidad <= 0) {
+    mensaje("Seleccioná una receta, una materia prima y una cantidad válida.", true);
+    return;
+  }
+
+  const { error } = await db
+    .from("receta_ingredientes")
+    .insert(ingrediente);
+
+  if (error) {
+    mensaje("Error al agregar ingrediente: " + error.message, true);
+    return;
+  }
+
+  this.reset();
+  mensaje("Ingrediente agregado correctamente.");
   await cargarRecetas();
 });
 
