@@ -158,6 +158,10 @@ th,td {
   <button type="submit">Agregar ingrediente</button>
 </form>
 
+  <h3>Ingredientes de la receta</h3>
+  <label for="detalleReceta">Elegí una receta para ver su composición</label>
+  <select id="detalleReceta" onchange="cargarDetalleReceta()"></select>
+  <div class="tabla"><table><thead><tr><th>Ingrediente</th><th>Cantidad</th><th>Costo</th><th>Acciones</th></tr></thead><tbody id="listaDetalleReceta"></tbody></table></div>
   <h3>Recetas registradas</h3>
   <div class="tabla">
     <table>
@@ -166,7 +170,7 @@ th,td {
           <th>Receta</th>
           <th>Rendimiento</th>
           <th>Costo total</th>
-          <th>Costo por unidad</th>
+          <th>Costo por unidad</th><th>Acciones</th>
         </tr>
       </thead>
       <tbody id="listaRecetas"></tbody>
@@ -239,6 +243,11 @@ step="0.001" placeholder="Stock inicial" required>
   <h2>Rentabilidad de productos</h2>
   <p>Costos, precios de venta y márgenes de ganancia.</p>
 
+  <h3>Registrar producto y precio de venta</h3>
+  <form id="formProducto"><input id="prodNombre" placeholder="Nombre del producto" required>
+  <label for="prodReceta">Receta asociada</label><select id="prodReceta" required></select>
+  <input id="prodPrecio" type="number" min="0" step="0.01" placeholder="Precio de venta" required>
+  <button type="submit">Guardar producto</button></form>
   <div class="tabla">
     <table>
       <thead>
@@ -247,7 +256,7 @@ step="0.001" placeholder="Stock inicial" required>
           <th>Precio de venta</th>
           <th>Costo unitario</th>
           <th>Ganancia</th>
-          <th>Margen %</th>
+          <th>Margen %</th><th>Acciones</th>
         </tr>
       </thead>
       <tbody id="listaRentabilidad"></tbody>
@@ -289,8 +298,9 @@ if (seccion === "materias") cargarMaterias();
 if (seccion === "recetas") {
   cargarRecetas();
   cargarOpcionesIngredientes();
+  cargarDetalleReceta();
 }
-if (seccion === "rentabilidad") cargarRentabilidad();
+if (seccion === "rentabilidad") { cargarRentabilidad(); cargarOpcionesProductos(); }
 }
 
 async function ingresar() {
@@ -457,7 +467,11 @@ async function cargarMaterias() {
     const boton = document.createElement("button");
     boton.textContent = "Eliminar";
     boton.onclick = () => eliminarMateria(m.id);
-
+    const editar = document.createElement("button");
+    editar.textContent = "Editar";
+    editar.onclick = () => editarMateria(m);
+    celdaAcciones.appendChild(editar);
+    celdaAcciones.appendChild(document.createTextNode(" "));
     celdaAcciones.appendChild(boton);
     fila.appendChild(celdaAcciones);
     tbody.appendChild(fila);
@@ -553,6 +567,12 @@ async function cargarRentabilidad() {
       fila.appendChild(celda);
     });
 
+    const acciones = document.createElement("td");
+    const boton = document.createElement("button");
+    boton.textContent = "Cambiar precio";
+    boton.onclick = () => cambiarPrecioProducto(p.producto);
+    acciones.appendChild(boton);
+    fila.appendChild(acciones);
     tbody.appendChild(fila);
   });
 }
@@ -601,6 +621,15 @@ async function cargarRecetas() {
       fila.appendChild(celda);
     });
 
+    const acciones = document.createElement("td");
+    const editar = document.createElement("button");
+    editar.textContent = "Editar";
+    editar.onclick = () => editarReceta(receta);
+    const eliminar = document.createElement("button");
+    eliminar.textContent = "Eliminar";
+    eliminar.onclick = () => eliminarReceta(receta.id);
+    acciones.append(editar, " ", eliminar);
+    fila.appendChild(acciones);
     tbody.appendChild(fila);
   }
 }
@@ -644,6 +673,8 @@ document.getElementById("formReceta")
   this.reset();
   mensaje("Receta guardada correctamente.");
   await cargarRecetas();
+  await cargarOpcionesIngredientes();
+  await cargarOpcionesProductos();
 });
 
 async function cargarOpcionesIngredientes() {
@@ -666,6 +697,7 @@ async function cargarOpcionesIngredientes() {
   const selectorRecetas = document.getElementById("ingReceta");
   const selectorMaterias = document.getElementById("ingMateria");
 
+  const elegida = selectorRecetas.value;
   selectorRecetas.replaceChildren();
   selectorMaterias.replaceChildren();
 
@@ -676,6 +708,7 @@ async function cargarOpcionesIngredientes() {
     selectorRecetas.appendChild(opcion);
   });
 
+  if (elegida && recetas.some(r => String(r.id) === elegida)) selectorRecetas.value = elegida;
   materias.forEach(materia => {
     const opcion = document.createElement("option");
     opcion.value = materia.id;
@@ -713,8 +746,128 @@ document.getElementById("formIngredienteReceta")
 
   this.reset();
   mensaje("Ingrediente agregado correctamente.");
+  document.getElementById("detalleReceta").value = String(ingrediente.receta_id);
   await cargarRecetas();
+  await cargarDetalleReceta();
 });
+
+
+// Administración de recetas, ingredientes y precios.
+const formatoDinero = n => "$ " + Number(n || 0).toLocaleString("es-AR", {minimumFractionDigits:2, maximumFractionDigits:2});
+async function editarReceta(r) {
+  const nombre = prompt("Nombre de la receta:", r.nombre);
+  if (nombre === null) return;
+  if (!nombre.trim()) return mensaje("Ingresá un nombre válido.", true);
+  const texto = prompt("Rendimiento (cantidad producida):", r.rendimiento);
+  if (texto === null) return;
+  const rendimiento = Number(texto.replace(",", "."));
+  if (!Number.isFinite(rendimiento) || rendimiento <= 0) return mensaje("Rendimiento inválido.", true);
+  const unidad = prompt("Unidad de rendimiento (unidades, kg, g):", r.unidad_rendimiento || "unidades");
+  if (unidad === null) return;
+  if (!unidad.trim()) return mensaje("Ingresá una unidad válida.", true);
+  const {error} = await db.from("recetas").update({nombre:nombre.trim(), rendimiento, unidad_rendimiento:unidad.trim()}).eq("id",r.id);
+  if (error) return mensaje("Error: " + error.message,true);
+  mensaje("Receta actualizada.");
+  await cargarRecetas(); await cargarOpcionesIngredientes(); await cargarDetalleReceta(); await cargarOpcionesProductos();
+}
+async function eliminarReceta(id) {
+  if (!confirm("¿Eliminar esta receta? Solo se podrá eliminar si no tiene registros relacionados.")) return;
+  const {error} = await db.from("recetas").delete().eq("id",id);
+  if (error) return mensaje("No se pudo eliminar: " + error.message,true);
+  mensaje("Receta eliminada.");
+  await cargarRecetas(); await cargarOpcionesIngredientes(); await cargarDetalleReceta(); await cargarOpcionesProductos();
+}
+async function editarMateria(m) {
+  const texto = prompt("Costo por " + m.unidad_base + " de " + m.nombre + ":", m.costo_unitario);
+  if (texto === null) return;
+  const costo = Number(texto.replace(",","."));
+  if (!Number.isFinite(costo) || costo < 0) return mensaje("Costo inválido.",true);
+  const stockTexto = prompt("Stock actual (" + m.unidad_base + "):",m.stock_actual);
+  if (stockTexto === null) return;
+  const stock = Number(stockTexto.replace(",","."));
+  if (!Number.isFinite(stock) || stock < 0) return mensaje("Stock inválido.",true);
+  const {error} = await db.from("materias_primas").update({costo_unitario:costo,stock_actual:stock}).eq("id",m.id);
+  if (error) return mensaje("Error: " + error.message,true);
+  mensaje("Materia prima actualizada.");
+  await cargarMaterias();
+}
+async function cargarDetalleReceta() {
+  const selector = document.getElementById("detalleReceta");
+  const elegida = selector.value;
+  const {data:recetas,error:e1} = await db.from("recetas").select("id,nombre").order("nombre");
+  if (e1) return mensaje("Error: " + e1.message,true);
+  selector.replaceChildren();
+  (recetas || []).forEach(r => {const o=document.createElement("option");o.value=r.id;o.textContent=r.nombre;selector.appendChild(o);});
+  if (elegida && recetas.some(r => String(r.id)===elegida)) selector.value=elegida;
+  const cuerpo = document.getElementById("listaDetalleReceta");
+  cuerpo.replaceChildren();
+  if (!selector.value) return;
+  const [{data:ingredientes,error:e2},{data:materias,error:e3}] = await Promise.all([
+    db.from("receta_ingredientes").select("id,materia_prima_id,cantidad").eq("receta_id",Number(selector.value)),
+    db.from("materias_primas").select("id,nombre,unidad_base,costo_unitario")
+  ]);
+  if (e2 || e3) return mensaje("Error: " + (e2 || e3).message,true);
+  const mapa = new Map((materias || []).map(m => [String(m.id),m]));
+  let total=0;
+  for (const ing of ingredientes || []) {
+    const m=mapa.get(String(ing.materia_prima_id));
+    const costo=Number(ing.cantidad)*Number(m?.costo_unitario || 0); total+=costo;
+    const tr=document.createElement("tr");
+    [m?.nombre || "Materia prima no disponible",`${ing.cantidad} ${m?.unidad_base || ""}`,formatoDinero(costo)].forEach(t=>{const td=document.createElement("td");td.textContent=t;tr.appendChild(td);});
+    const td=document.createElement("td");
+    const editar=document.createElement("button"); editar.textContent="Editar cantidad"; editar.onclick=()=>editarCantidadIngrediente(ing);
+    const borrar=document.createElement("button"); borrar.textContent="Quitar"; borrar.onclick=()=>eliminarIngrediente(ing.id);
+    td.append(editar," ",borrar);tr.appendChild(td);cuerpo.appendChild(tr);
+  }
+  const tr=document.createElement("tr");const td=document.createElement("td");td.colSpan=2;td.textContent="TOTAL";
+  const valor=document.createElement("td");valor.textContent=formatoDinero(total);
+  tr.append(td,valor,document.createElement("td"));cuerpo.appendChild(tr);
+}
+async function editarCantidadIngrediente(ing) {
+  const texto=prompt("Nueva cantidad (en la unidad base):",ing.cantidad);
+  if (texto===null) return;
+  const cantidad=Number(texto.replace(",","."));
+  if (!Number.isFinite(cantidad)||cantidad<=0) return mensaje("Cantidad inválida.",true);
+  const {error}=await db.from("receta_ingredientes").update({cantidad}).eq("id",ing.id);
+  if (error) return mensaje("Error: " + error.message,true);
+  mensaje("Cantidad actualizada.");await cargarDetalleReceta();await cargarRecetas();
+}
+async function eliminarIngrediente(id) {
+  if (!confirm("¿Quitar este ingrediente de la receta?")) return;
+  const {error}=await db.from("receta_ingredientes").delete().eq("id",id);
+  if (error) return mensaje("Error: " + error.message,true);
+  mensaje("Ingrediente eliminado.");await cargarDetalleReceta();await cargarRecetas();
+}
+async function cargarOpcionesProductos() {
+  const select=document.getElementById("prodReceta");const anterior=select.value;
+  const {data,error}=await db.from("recetas").select("id,nombre").order("nombre");
+  if (error) return mensaje("Error: " + error.message,true);
+  select.replaceChildren();
+  (data || []).forEach(r=>{const o=document.createElement("option");o.value=r.id;o.textContent=r.nombre;select.appendChild(o);});
+  if (data.some(r=>String(r.id)===anterior))select.value=anterior;
+}
+document.getElementById("formProducto").addEventListener("submit",async function(e){
+  e.preventDefault();
+  const nombre=document.getElementById("prodNombre").value.trim();
+  const receta_id=Number(document.getElementById("prodReceta").value);
+  const precio_venta=Number(document.getElementById("prodPrecio").value);
+  if (!nombre || !receta_id || !Number.isFinite(precio_venta) || precio_venta<0) return mensaje("Revisá los datos del producto.",true);
+  const {error}=await db.from("productos_venta").insert({nombre,receta_id,precio_venta});
+  if (error) return mensaje("Error al guardar producto: " + error.message,true);
+  this.reset();mensaje("Producto guardado.");await cargarRentabilidad();
+});
+async function cambiarPrecioProducto(nombre) {
+  const {data,error}=await db.from("productos_venta").select("id,nombre,precio_venta").eq("nombre",nombre).limit(1);
+  if (error) return mensaje("Error: " + error.message,true);
+  if (!data?.length) return mensaje("No se encontró el producto.",true);
+  const texto=prompt("Nuevo precio de venta para " + nombre + ":",data[0].precio_venta);
+  if (texto===null) return;
+  const precio=Number(texto.replace(",","."));
+  if (!Number.isFinite(precio)||precio<0) return mensaje("Precio inválido.",true);
+  const {error:e}=await db.from("productos_venta").update({precio_venta:precio}).eq("id",data[0].id);
+  if (e) return mensaje("Error: " + e.message,true);
+  mensaje("Precio actualizado.");await cargarRentabilidad();
+}
 
 iniciarAplicacion();
 
