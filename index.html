@@ -127,7 +127,7 @@ th,td {
 <div style="margin:16px 0;padding:14px;border:1px solid #d6e0e7;border-radius:9px;background:#f8fafb">
 <h3>Lectura automática de la fotografía (OCR)</h3>
 <div style="padding:12px;margin:10px 0;border:1px solid #ccd3d9;border-radius:8px;background:white">
-<strong>Seleccionar zona de productos (V4)</strong>
+<strong>Seleccionar zona de productos (V5)</strong>
 <p style="margin:8px 0">Elegí una foto arriba. Arrastrá con el mouse sobre la imagen para marcar únicamente la tabla de productos. Después presioná <strong>Usar zona seleccionada</strong> y leé la factura. También podés volver a la imagen completa.</p>
 <canvas id="facRecorteCanvas" style="display:none;width:100%;max-width:820px;height:auto;touch-action:none;cursor:crosshair;border:1px solid #b8c8d4"></canvas>
 <div><button type="button" id="facRecortarBtn" onclick="aplicarRecorteFactura()" disabled>Usar zona seleccionada</button>
@@ -142,6 +142,14 @@ th,td {
 <div id="facOcrImagenProcesada" style="max-height:260px;overflow:auto;margin:8px 0"></div>
 <button type="button" onclick="copiarTextoFactura()">Copiar texto reconocido</button>
 <p><small>La lectura OCR prueba varias preparaciones de la imagen y permite comparar resultados. La selección automática se basa en la confianza estimada por OCR, no garantiza que los importes sean correctos. Tesseract.js descarga componentes desde internet. No interpreta de forma confiable descuentos, bultos, unidades ni IVA: comprobá el costo final por unidad base antes de agregarlo a revisión. Los PDF pueden verse, pero no se leen con OCR en esta versión.</small></p>
+</div>
+<div style="margin:16px 0;padding:14px;border:1px solid #d6e0e7;border-radius:9px;background:#f8fafb">
+<h3>Interpretar productos reconocidos (V5)</h3>
+<p>Después del OCR, presioná <strong>Detectar renglones</strong>. Corregí cada producto, su cantidad, presentación, precio, descuento e IVA según la factura. Los importes no se extraen automáticamente porque el OCR puede mezclar columnas.</p>
+<button type="button" onclick="detectarRenglonesV5()">Detectar renglones</button>
+<p id="facV5Estado" role="status"></p>
+<div id="facV5Renglones"></div>
+<p><small>El cálculo supone precio neto por bulto, descuento sobre el neto y luego IVA. Verificá qué representa cada importe en la factura. No incluye percepciones. Ningún valor se envía a Supabase hasta que lo agregues a revisión y apruebes explícitamente.</small></p>
 </div>
 <h3>Nuevo renglón</h3>
 <div class="fila">
@@ -1134,6 +1142,49 @@ async function copiarTextoFactura() {
   }
 }
 
+// V5: propuesta local de productos. Los valores monetarios se ingresan y verifican manualmente.
+function normalizarV5(t){return String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();}
+function candidatosV5(texto){
+ const lineas=texto.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ const patron=/(harina|azucar|manteca|margarina|queso|aceite|chocolate|frambuesa|crema|leche|cacao|almendra|pistacho|frutilla|banana|tomate|huevo|levadura|sal\b|dulce)/i;
+ return lineas.filter(x=>patron.test(normalizarV5(x)) && x.length<220).slice(0,30);
+}
+function detectarRenglonesV5(){
+ const texto=document.getElementById('facOcrTexto').value;
+ const lineas=candidatosV5(texto), destino=document.getElementById('facV5Renglones');destino.replaceChildren();
+ const estado=document.getElementById('facV5Estado');
+ if(!lineas.length){estado.textContent='No se detectaron productos claros. Podés corregir el texto OCR y volver a intentar.';return;}
+ estado.textContent='Se detectaron '+lineas.length+' posibles renglones. Revisá todos los datos contra la factura.';
+ lineas.forEach((linea,i)=>{
+  const caja=document.createElement('div');caja.style='border:1px solid #d6e0e7;border-radius:8px;padding:12px;margin:10px 0;background:white';
+  const encabezado=document.createElement('strong');encabezado.textContent='Renglón '+(i+1);caja.appendChild(encabezado);
+  const descripcion=document.createElement('textarea');descripcion.rows=2;descripcion.style='width:100%;margin:6px 0';descripcion.value=linea;caja.appendChild(descripcion);
+  const etiqueta=document.createElement('label');etiqueta.textContent='Materia prima de la base';
+  const select=document.createElement('select');select.style='width:100%;margin:6px 0';
+  const vacio=document.createElement('option');vacio.value='';vacio.textContent='Elegir materia prima (obligatorio)';select.appendChild(vacio);
+  for(const m of materiasFactura){const op=document.createElement('option');op.value=m.id;op.textContent=m.nombre+' ('+m.unidad_base+')';select.appendChild(op);}
+  const norm=normalizarV5(linea);
+  const coincidencias=materiasFactura.filter(m=>{const n=normalizarV5(m.nombre);return n.length>3 && norm.includes(n);}).sort((a,b)=>b.nombre.length-a.nombre.length);
+  if(coincidencias.length===1)select.value=String(coincidencias[0].id);
+  etiqueta.appendChild(select);caja.appendChild(etiqueta);
+  const fila=document.createElement('div');fila.style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px';
+  const campos=[['Bultos','bultos','1'],['Unidades base por bulto','contenido',''],['Precio neto por bulto ($)','precio',''],['Descuento (%)','descuento','0'],['IVA (%)','iva','21']];
+  const entradas={};
+  for(const [nombre,clave,valor] of campos){const l=document.createElement('label');l.textContent=nombre;const inp=document.createElement('input');inp.type='number';inp.min='0';inp.step='any';inp.value=valor;inp.style='width:100%';l.appendChild(inp);fila.appendChild(l);entradas[clave]=inp;}
+  caja.appendChild(fila);
+  const resultado=document.createElement('p');caja.appendChild(resultado);
+  const calcular=document.createElement('button');calcular.type='button';calcular.textContent='Calcular y pasar al formulario';calcular.onclick=()=>{
+   const m=materiasFactura.find(x=>x.id===Number(select.value));
+   const b=Number(entradas.bultos.value),q=Number(entradas.contenido.value),p=Number(entradas.precio.value),d=Number(entradas.descuento.value),v=Number(entradas.iva.value);
+   if(!m||![b,q,p,d,v].every(Number.isFinite)||b<=0||q<=0||p<=0||d<0||d>100||v<0||v>100){resultado.textContent='Revisá materia prima, cantidad, precio, descuento e IVA.';return;}
+   const costo=(b*p*(1-d/100)*(1+v/100))/(b*q);
+   if(!Number.isFinite(costo)||costo<=0){resultado.textContent='No se pudo calcular el costo.';return;}
+   document.getElementById('facMateria').value=String(m.id);
+   document.getElementById('facPrecio').value=costo.toFixed(4);
+   resultado.textContent='Costo propuesto: $'+costo.toFixed(4)+' por '+m.unidad_base+'. Revisá el cálculo y presioná «Agregar a revisión» en Nuevo renglón. No se guardó nada.';
+  };caja.appendChild(calcular);destino.appendChild(caja);
+ });
+}
 // Módulo de revisión de precios: no almacena comprobantes en esta etapa.
 let materiasFactura = [];
 let pendientesFactura = [];
