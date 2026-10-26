@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Costos EPA</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
 <style>
 :root {
   --azul:#19334b;
@@ -115,7 +116,7 @@ th,td {
 
 <div id="facturas" class="card oculto">
 <h2>Facturas · revisión de precios</h2>
-<p>Adjuntá una foto o PDF como referencia y cargá los renglones del comprobante. Esta versión no interpreta automáticamente la imagen ni guarda el archivo en Supabase.</p>
+<p>Adjuntá una foto JPG o PNG y usá el reconocimiento de texto. Revisá siempre el resultado: los precios y las cantidades pueden leerse incorrectamente. Los archivos no se guardan en Supabase.</p>
 <div class="fila">
 <label>Comprobante (foto o PDF)<input id="facArchivo" type="file" accept="image/*,application/pdf" onchange="previsualizarFactura()"></label>
 <label>Proveedor<input id="facProveedor" placeholder="Nombre del proveedor"></label>
@@ -123,13 +124,21 @@ th,td {
 </div>
 <p id="facArchivoEstado"></p>
 <div id="facVista"></div>
+<div style="margin:16px 0;padding:14px;border:1px solid #d6e0e7;border-radius:9px;background:#f8fafb">
+<h3>Lectura automática de la fotografía (OCR)</h3>
+<button id="facLeerBtn" type="button" onclick="leerFacturaOCR()">Leer factura automáticamente</button>
+<p id="facOcrEstado" role="status" aria-live="polite">Seleccioná una foto JPG o PNG para comenzar. La primera lectura puede tardar mientras se descarga el motor de reconocimiento.</p>
+<label for="facOcrTexto">Texto reconocido (editable; verificá contra la imagen)</label>
+<textarea id="facOcrTexto" rows="10" style="width:100%;padding:12px;border:1px solid #ccd3d9;border-radius:7px;font:14px/1.5 monospace" placeholder="El texto reconocido aparecerá aquí. No se cargarán precios automáticamente."></textarea>
+<button type="button" onclick="copiarTextoFactura()">Copiar texto reconocido</button>
+<p><small>La lectura OCR se realiza en tu navegador. Tesseract.js descarga componentes desde internet. No interpreta de forma confiable descuentos, bultos, unidades ni IVA: comprobá el costo final por unidad base antes de agregarlo a revisión. Los PDF pueden verse, pero no se leen con OCR en esta versión.</small></p>
+</div>
 <h3>Nuevo renglón</h3>
 <div class="fila">
 <label>Materia prima<select id="facMateria"></select></label>
 <label>Precio por unidad base ($)<input id="facPrecio" type="number" min="0.0001" step="0.0001" placeholder="Ej.: 3100"></label>
 </div>
-<label><input id="facImpuesto" type="checkbox" style="width:auto"> Precio ingresado incluye IVA recuperable (separarlo antes de aprobar)</label>
-<p>Ingresá el costo con el criterio contable que corresponda. Si el precio incluye IVA recuperable, calculá primero el importe neto. No se realiza conversión automática de impuestos.</p>
+<p><small><strong>Criterio Costos EPA:</strong> ingresá el costo final por unidad base <strong>con IVA incluido</strong>, aplicando descuentos y conversiones de cantidad cuando correspondan. Revisá las percepciones por separado.</small></p>
 <button onclick="agregarRenglonFactura()">Agregar a revisión</button>
 <h3>Precios pendientes de aprobación</h3>
 <div class="tabla"><table><thead><tr><th>Materia prima</th><th>Unidad</th><th>Costo actual</th><th>Costo propuesto</th><th>Acciones</th></tr></thead><tbody id="facPendientes"></tbody></table></div>
@@ -895,7 +904,60 @@ async function cambiarPrecioProducto(nombre) {
   mensaje("Precio actualizado.");await cargarRentabilidad();
 }
 
-// Módulo de revisión: sin OCR ni almacenamiento de archivos en esta etapa.
+// OCR de fotos local en Chrome. No escribe datos ni infiere precios automáticamente.
+let ocrFacturaEnCurso = false;
+async function leerFacturaOCR() {
+  const archivo = document.getElementById('facArchivo').files[0];
+  const estado = document.getElementById('facOcrEstado');
+  const boton = document.getElementById('facLeerBtn');
+  if (ocrFacturaEnCurso) return;
+  if (!archivo || !['image/jpeg','image/png','image/webp'].includes(archivo.type)) {
+    estado.textContent = 'Elegí primero una fotografía JPG, PNG o WEBP. El PDF no admite OCR en esta versión.';
+    return;
+  }
+  if (!window.Tesseract) {
+    estado.textContent = 'No se pudo cargar Tesseract.js. Comprobá la conexión a internet y actualizá la página.';
+    return;
+  }
+  ocrFacturaEnCurso = true;
+  boton.disabled = true;
+  estado.textContent = 'Preparando reconocimiento...';
+  let worker = null;
+  try {
+    worker = await Tesseract.createWorker('spa', 1, {
+      logger: m => {
+        const porcentaje = m.progress == null ? '' : ' (' + Math.round(m.progress * 100) + '%)';
+        estado.textContent = 'OCR: ' + m.status + porcentaje;
+      }
+    });
+    const resultado = await worker.recognize(archivo);
+    const texto = resultado?.data?.text || '';
+    document.getElementById('facOcrTexto').value = texto;
+    estado.textContent = texto.trim()
+      ? 'Lectura terminada. Revisá el texto contra la factura antes de ingresar cualquier costo.'
+      : 'No se pudo reconocer texto legible. Probá una foto más nítida y de frente.';
+  } catch (e) {
+    estado.textContent = 'No se pudo completar la lectura: ' + (e?.message || String(e));
+  } finally {
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
+    ocrFacturaEnCurso = false;
+    boton.disabled = false;
+  }
+}
+async function copiarTextoFactura() {
+  const campo = document.getElementById('facOcrTexto');
+  const estado = document.getElementById('facOcrEstado');
+  if (!campo.value.trim()) { estado.textContent = 'Todavía no hay texto para copiar.'; return; }
+  try {
+    await navigator.clipboard.writeText(campo.value);
+    estado.textContent = 'Texto copiado. Revisalo antes de usarlo para calcular precios.';
+  } catch (_) {
+    campo.focus(); campo.select();
+    estado.textContent = 'Texto seleccionado. Presioná Ctrl + C para copiarlo.';
+  }
+}
+
+// Módulo de revisión de precios: no almacena comprobantes en esta etapa.
 let materiasFactura = [];
 let pendientesFactura = [];
 let urlFactura = null;
