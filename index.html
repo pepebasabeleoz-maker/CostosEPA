@@ -126,6 +126,14 @@ th,td {
 <div id="facVista"></div>
 <div style="margin:16px 0;padding:14px;border:1px solid #d6e0e7;border-radius:9px;background:#f8fafb">
 <h3>Lectura automática de la fotografía (OCR)</h3>
+<div style="padding:12px;margin:10px 0;border:1px solid #ccd3d9;border-radius:8px;background:white">
+<strong>Seleccionar zona de productos (V4)</strong>
+<p style="margin:8px 0">Elegí una foto arriba. Arrastrá con el mouse sobre la imagen para marcar únicamente la tabla de productos. Después presioná <strong>Usar zona seleccionada</strong> y leé la factura. También podés volver a la imagen completa.</p>
+<canvas id="facRecorteCanvas" style="display:none;width:100%;max-width:820px;height:auto;touch-action:none;cursor:crosshair;border:1px solid #b8c8d4"></canvas>
+<div><button type="button" id="facRecortarBtn" onclick="aplicarRecorteFactura()" disabled>Usar zona seleccionada</button>
+<button type="button" onclick="restablecerRecorteFactura()">Usar foto completa</button></div>
+<p id="facRecorteEstado" role="status">Seleccioná una fotografía para marcar la tabla.</p>
+</div>
 <button id="facLeerBtn" type="button" onclick="leerFacturaOCR()">Leer factura automáticamente</button>
 <p id="facOcrEstado" role="status" aria-live="polite">Seleccioná una foto JPG o PNG para comenzar. La primera lectura puede tardar mientras se descarga el motor de reconocimiento.</p>
 <label for="facOcrTexto">Texto reconocido (editable; verificá contra la imagen)</label>
@@ -906,7 +914,101 @@ async function cambiarPrecioProducto(nombre) {
   mensaje("Precio actualizado.");await cargarRentabilidad();
 }
 
-// OCR V3: comparación de variantes locales, sin escritura en Supabase.
+// OCR V4: recorte local con mouse, sin escritura de imágenes ni precios en Supabase.
+let recorteFuente = null;
+let recorteElegido = null;
+let recorteInicio = null;
+let recorteArrastrando = false;
+let recorteImagen = null;
+function dibujarSelectorRecorte() {
+  const c=document.getElementById('facRecorteCanvas');
+  const ctx=c.getContext('2d');
+  ctx.clearRect(0,0,c.width,c.height);
+  if(!recorteImagen)return;
+  ctx.drawImage(recorteImagen,0,0,c.width,c.height);
+  if(recorteElegido){
+    const r=recorteElegido;
+    ctx.fillStyle='rgba(25,51,75,0.18)';ctx.fillRect(r.x,r.y,r.w,r.h);
+    ctx.strokeStyle='#00a885';ctx.lineWidth=Math.max(2,c.width/450);
+    ctx.strokeRect(r.x,r.y,r.w,r.h);
+  }
+}
+function puntoSelector(e){
+  const c=document.getElementById('facRecorteCanvas');
+  const r=c.getBoundingClientRect();
+  return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))};
+}
+function inicializarSelectorRecorte(){
+  const c=document.getElementById('facRecorteCanvas');
+  c.addEventListener('pointerdown',e=>{
+    if(!recorteImagen||ocrFacturaEnCurso)return;
+    recorteArrastrando=true;recorteInicio=puntoSelector(e);recorteElegido=null;
+    c.setPointerCapture(e.pointerId);
+  });
+  c.addEventListener('pointermove',e=>{
+    if(!recorteArrastrando)return;
+    const p=puntoSelector(e);
+    recorteElegido={x:Math.min(p.x,recorteInicio.x),y:Math.min(p.y,recorteInicio.y),w:Math.abs(p.x-recorteInicio.x),h:Math.abs(p.y-recorteInicio.y)};
+    dibujarSelectorRecorte();
+  });
+  c.addEventListener('pointerup',e=>{
+    if(!recorteArrastrando)return;
+    recorteArrastrando=false;
+    const p=puntoSelector(e);
+    recorteElegido={x:Math.min(p.x,recorteInicio.x),y:Math.min(p.y,recorteInicio.y),w:Math.abs(p.x-recorteInicio.x),h:Math.abs(p.y-recorteInicio.y)};
+    const valido=recorteElegido.w>=15&&recorteElegido.h>=15;
+    document.getElementById('facRecortarBtn').disabled=!valido;
+    document.getElementById('facRecorteEstado').textContent=valido?'Zona marcada. Presioná «Usar zona seleccionada».':'Seleccioná un área más grande.';
+    dibujarSelectorRecorte();
+  });
+  c.addEventListener('pointercancel',()=>{recorteArrastrando=false;});
+}
+async function cargarSelectorRecorte(archivo){
+  recorteFuente=null;recorteElegido=null;recorteImagen=null;
+  document.getElementById('facRecortarBtn').disabled=true;
+  const c=document.getElementById('facRecorteCanvas');c.style.display='none';
+  const estado=document.getElementById('facRecorteEstado');
+  if(!archivo||!['image/jpeg','image/png','image/webp'].includes(archivo.type)){
+    estado.textContent='Para seleccionar una zona, elegí una foto JPG, PNG o WEBP.';return;
+  }
+  const url=URL.createObjectURL(archivo);
+  try{
+    const img=new Image();img.src=url;await img.decode();
+    if(document.getElementById('facArchivo').files[0]!==archivo)return;
+    recorteImagen=img;
+    // Mantener resolución original para recortar con precisión; limitar el tamaño de trabajo.
+    const factor=Math.min(1,2600/Math.max(img.naturalWidth,img.naturalHeight));
+    c.width=Math.max(1,Math.round(img.naturalWidth*factor));
+    c.height=Math.max(1,Math.round(img.naturalHeight*factor));
+    c.style.display='block';dibujarSelectorRecorte();
+    estado.textContent='Arrastrá sobre la foto para marcar solo la tabla de productos.';
+  }catch(e){estado.textContent='No se pudo abrir la foto para recortarla.';}
+  finally{URL.revokeObjectURL(url);}
+}
+function aplicarRecorteFactura(){
+  if(!recorteImagen||!recorteElegido||recorteElegido.w<15||recorteElegido.h<15)return;
+  const c=document.getElementById('facRecorteCanvas');
+  const factorX=recorteImagen.naturalWidth/c.width;
+  const factorY=recorteImagen.naturalHeight/c.height;
+  const x=Math.round(recorteElegido.x*factorX),y=Math.round(recorteElegido.y*factorY);
+  const w=Math.min(recorteImagen.naturalWidth-x,Math.round(recorteElegido.w*factorX));
+  const h=Math.min(recorteImagen.naturalHeight-y,Math.round(recorteElegido.h*factorY));
+  const salida=document.createElement('canvas');salida.width=w;salida.height=h;
+  salida.getContext('2d').drawImage(recorteImagen,x,y,w,h,0,0,w,h);
+  salida.toBlob(blob=>{
+    if(!blob){document.getElementById('facRecorteEstado').textContent='No se pudo generar el recorte.';return;}
+    recorteFuente=blob;
+    document.getElementById('facRecorteEstado').textContent='Zona aplicada ('+w+' × '+h+' píxeles). Ahora presioná «Leer factura automáticamente». No se modificó el archivo original.';
+  },'image/png');
+}
+function restablecerRecorteFactura(){
+  recorteFuente=null;recorteElegido=null;
+  document.getElementById('facRecortarBtn').disabled=true;
+  dibujarSelectorRecorte();
+  document.getElementById('facRecorteEstado').textContent=recorteImagen?'Se usará la foto completa. Podés marcar otra zona cuando quieras.':'Seleccioná una fotografía.';
+}
+document.addEventListener('DOMContentLoaded',inicializarSelectorRecorte);
+// OCR V4: comparación de variantes locales, sin escritura en Supabase.
 let ocrFacturaEnCurso = false;
 let variantesOCR = [];
 let imagenesOCR = [];
@@ -997,8 +1099,8 @@ async function leerFacturaOCR() {
   ocrFacturaEnCurso=true;boton.disabled=true;variantesOCR=[];imagenesOCR=[];
   let worker=null;
   try {
-    estado.textContent='Preparando ampliación y contraste de la fotografía...';
-    imagenesOCR=await prepararImagenOCR(archivo);
+    estado.textContent=recorteFuente?'Preparando la zona seleccionada de productos...':'Preparando ampliación y contraste de la fotografía...';
+    imagenesOCR=await prepararImagenOCR(recorteFuente || archivo);
     const selectorImagen=document.getElementById('facOcrVista');selectorImagen.replaceChildren();
     imagenesOCR.forEach((v,i)=>{const o=document.createElement('option');o.value=i;o.textContent=v.nombre;selectorImagen.appendChild(o);});
     selectorImagen.disabled=false;mostrarImagenProcesada();
@@ -1048,6 +1150,8 @@ function previsualizarFactura(){
   const f=document.getElementById('facArchivo').files[0];
   const vista=document.getElementById('facVista');vista.replaceChildren();
   if(urlFactura){URL.revokeObjectURL(urlFactura);urlFactura=null;}
+  recorteFuente=null;recorteElegido=null;
+  cargarSelectorRecorte(f);
   if(!f)return;
   if(!(f.type.startsWith('image/')||f.type==='application/pdf')){document.getElementById('facArchivoEstado').textContent='Elegí una imagen o PDF.';return;}
   urlFactura=URL.createObjectURL(f);
