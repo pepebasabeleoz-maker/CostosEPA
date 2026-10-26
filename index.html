@@ -130,8 +130,10 @@ th,td {
 <p id="facOcrEstado" role="status" aria-live="polite">Seleccioná una foto JPG o PNG para comenzar. La primera lectura puede tardar mientras se descarga el motor de reconocimiento.</p>
 <label for="facOcrTexto">Texto reconocido (editable; verificá contra la imagen)</label>
 <textarea id="facOcrTexto" rows="10" style="width:100%;padding:12px;border:1px solid #ccd3d9;border-radius:7px;font:14px/1.5 monospace" placeholder="El texto reconocido aparecerá aquí. No se cargarán precios automáticamente."></textarea>
+<div class="fila"><label>Resultado de lectura<select id="facOcrVariante" onchange="cambiarVarianteOCR()" disabled><option>Sin resultados todavía</option></select></label><label>Vista del procesamiento<select id="facOcrVista" onchange="mostrarImagenProcesada()" disabled><option>Original</option></select></label></div>
+<div id="facOcrImagenProcesada" style="max-height:260px;overflow:auto;margin:8px 0"></div>
 <button type="button" onclick="copiarTextoFactura()">Copiar texto reconocido</button>
-<p><small>La lectura OCR se realiza en tu navegador. Tesseract.js descarga componentes desde internet. No interpreta de forma confiable descuentos, bultos, unidades ni IVA: comprobá el costo final por unidad base antes de agregarlo a revisión. Los PDF pueden verse, pero no se leen con OCR en esta versión.</small></p>
+<p><small>La lectura OCR prueba varias preparaciones de la imagen y permite comparar resultados. La selección automática se basa en la confianza estimada por OCR, no garantiza que los importes sean correctos. Tesseract.js descarga componentes desde internet. No interpreta de forma confiable descuentos, bultos, unidades ni IVA: comprobá el costo final por unidad base antes de agregarlo a revisión. Los PDF pueden verse, pero no se leen con OCR en esta versión.</small></p>
 </div>
 <h3>Nuevo renglón</h3>
 <div class="fila">
@@ -904,45 +906,118 @@ async function cambiarPrecioProducto(nombre) {
   mensaje("Precio actualizado.");await cargarRentabilidad();
 }
 
-// OCR de fotos local en Chrome. No escribe datos ni infiere precios automáticamente.
+// OCR V3: comparación de variantes locales, sin escritura en Supabase.
 let ocrFacturaEnCurso = false;
-async function leerFacturaOCR() {
-  const archivo = document.getElementById('facArchivo').files[0];
-  const estado = document.getElementById('facOcrEstado');
-  const boton = document.getElementById('facLeerBtn');
-  if (ocrFacturaEnCurso) return;
-  if (!archivo || !['image/jpeg','image/png','image/webp'].includes(archivo.type)) {
-    estado.textContent = 'Elegí primero una fotografía JPG, PNG o WEBP. El PDF no admite OCR en esta versión.';
-    return;
-  }
-  if (!window.Tesseract) {
-    estado.textContent = 'No se pudo cargar Tesseract.js. Comprobá la conexión a internet y actualizá la página.';
-    return;
-  }
-  ocrFacturaEnCurso = true;
-  boton.disabled = true;
-  estado.textContent = 'Preparando reconocimiento...';
-  let worker = null;
+let variantesOCR = [];
+let imagenesOCR = [];
+function cambiarVarianteOCR() {
+  const i = Number(document.getElementById('facOcrVariante').value);
+  if (variantesOCR[i]) document.getElementById('facOcrTexto').value = variantesOCR[i].texto;
+}
+function mostrarImagenProcesada() {
+  const i = Number(document.getElementById('facOcrVista').value);
+  const cont = document.getElementById('facOcrImagenProcesada');
+  cont.replaceChildren();
+  if (!imagenesOCR[i]) return;
+  const img = document.createElement('img');
+  img.src = imagenesOCR[i].url;
+  img.alt = 'Vista previa de imagen procesada: ' + imagenesOCR[i].nombre;
+  img.style.cssText = 'max-width:100%;max-height:250px;object-fit:contain;border:1px solid #ccd3d9';
+  cont.appendChild(img);
+}
+async function prepararImagenOCR(archivo) {
+  const url = URL.createObjectURL(archivo);
   try {
-    worker = await Tesseract.createWorker('spa', 1, {
-      logger: m => {
-        const porcentaje = m.progress == null ? '' : ' (' + Math.round(m.progress * 100) + '%)';
-        estado.textContent = 'OCR: ' + m.status + porcentaje;
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const escala = Math.min(3, 2800 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * escala));
+    const h = Math.max(1, Math.round(img.naturalHeight * escala));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, w, h);
+    const original = canvas.toDataURL('image/png');
+    const pix = ctx.getImageData(0,0,w,h);
+    const datos = pix.data;
+    const gris = new Uint8Array(w*h);
+    let minimo=255, maximo=0;
+    for(let i=0,j=0;i<datos.length;i+=4,j++) {
+      const v=Math.round(.299*datos[i]+.587*datos[i+1]+.114*datos[i+2]);
+      gris[j]=v; if(v<minimo)minimo=v; if(v>maximo)maximo=v;
+    }
+    const rango=Math.max(30,maximo-minimo);
+    const contraste = new Uint8Array(gris.length);
+    for(let j=0;j<gris.length;j++) contraste[j]=Math.max(0,Math.min(255,Math.round((gris[j]-minimo)*255/rango)));
+    function pintar(valores) {
+      const salida=ctx.createImageData(w,h);
+      for(let j=0,k=0;j<valores.length;j++,k+=4) {
+        salida.data[k]=salida.data[k+1]=salida.data[k+2]=valores[j];salida.data[k+3]=255;
       }
-    });
-    const resultado = await worker.recognize(archivo);
-    const texto = resultado?.data?.text || '';
-    document.getElementById('facOcrTexto').value = texto;
-    estado.textContent = texto.trim()
-      ? 'Lectura terminada. Revisá el texto contra la factura antes de ingresar cualquier costo.'
-      : 'No se pudo reconocer texto legible. Probá una foto más nítida y de frente.';
-  } catch (e) {
-    estado.textContent = 'No se pudo completar la lectura: ' + (e?.message || String(e));
-  } finally {
-    if (worker) { try { await worker.terminate(); } catch (_) {} }
-    ocrFacturaEnCurso = false;
-    boton.disabled = false;
+      ctx.putImageData(salida,0,0);
+      return canvas.toDataURL('image/png');
+    }
+    const mejorado=pintar(contraste);
+    // Umbral adaptativo por bloques mediante imagen integral (rápido y sin librerías).
+    const integral=new Float64Array((w+1)*(h+1));
+    for(let y=1;y<=h;y++) {
+      let suma=0;
+      for(let x=1;x<=w;x++) {
+        suma+=contraste[(y-1)*w+x-1];
+        integral[y*(w+1)+x]=integral[(y-1)*(w+1)+x]+suma;
+      }
+    }
+    const radio=Math.max(12,Math.round(Math.min(w,h)/45));
+    const binario=new Uint8Array(w*h);
+    for(let y=0;y<h;y++) {
+      const y0=Math.max(0,y-radio),y1=Math.min(h,y+radio+1);
+      for(let x=0;x<w;x++) {
+        const x0=Math.max(0,x-radio),x1=Math.min(w,x+radio+1);
+        const suma=integral[y1*(w+1)+x1]-integral[y0*(w+1)+x1]-integral[y1*(w+1)+x0]+integral[y0*(w+1)+x0];
+        const promedio=suma/((x1-x0)*(y1-y0));
+        binario[y*w+x]=contraste[y*w+x]<promedio-12?0:255;
+      }
+    }
+    const blancoNegro=pintar(binario);
+    return [{nombre:'Original ampliada',url:original},{nombre:'Contraste mejorado',url:mejorado},{nombre:'Blanco y negro adaptativo',url:blancoNegro}];
+  } finally {URL.revokeObjectURL(url);}
+}
+async function leerFacturaOCR() {
+  const archivo=document.getElementById('facArchivo').files[0];
+  const estado=document.getElementById('facOcrEstado');
+  const boton=document.getElementById('facLeerBtn');
+  if(ocrFacturaEnCurso)return;
+  if(!archivo||!['image/jpeg','image/png','image/webp'].includes(archivo.type)) {
+    estado.textContent='Elegí primero una fotografía JPG, PNG o WEBP. Los PDF no admiten OCR en esta versión.';return;
   }
+  if(!window.Tesseract){estado.textContent='No se cargó Tesseract.js. Revisá internet y actualizá la página.';return;}
+  ocrFacturaEnCurso=true;boton.disabled=true;variantesOCR=[];imagenesOCR=[];
+  let worker=null;
+  try {
+    estado.textContent='Preparando ampliación y contraste de la fotografía...';
+    imagenesOCR=await prepararImagenOCR(archivo);
+    const selectorImagen=document.getElementById('facOcrVista');selectorImagen.replaceChildren();
+    imagenesOCR.forEach((v,i)=>{const o=document.createElement('option');o.value=i;o.textContent=v.nombre;selectorImagen.appendChild(o);});
+    selectorImagen.disabled=false;mostrarImagenProcesada();
+    worker=await Tesseract.createWorker('spa',1,{logger:m=>{
+      if(m.status==='recognizing text')estado.textContent='Reconociendo variantes: '+Math.round((m.progress||0)*100)+'% de la lectura actual';
+    }});
+    for(let i=0;i<imagenesOCR.length;i++) {
+      estado.textContent='Leyendo '+(i+1)+' de '+imagenesOCR.length+': '+imagenesOCR[i].nombre+'...';
+      const resultado=await worker.recognize(imagenesOCR[i].url);
+      variantesOCR.push({nombre:imagenesOCR[i].nombre,texto:resultado.data?.text||'',confianza:Number(resultado.data?.confidence||0)});
+    }
+    const selector=document.getElementById('facOcrVariante');selector.replaceChildren();
+    variantesOCR.forEach((v,i)=>{const o=document.createElement('option');o.value=i;o.textContent=v.nombre+' (confianza OCR '+v.confianza.toFixed(0)+'%)';selector.appendChild(o);});
+    selector.disabled=false;
+    const mejor=variantesOCR.reduce((indice,v,i)=>v.confianza>variantesOCR[indice].confianza?i:indice,0);
+    selector.value=String(mejor);cambiarVarianteOCR();
+    estado.textContent='Lectura finalizada. Compará las 3 variantes; revisá especialmente cantidades, descuentos e IVA antes de ingresar precios.';
+  } catch(e) {estado.textContent='No se pudo completar la lectura: '+(e?.message||String(e));}
+  finally {if(worker){try{await worker.terminate();}catch(_){}}ocrFacturaEnCurso=false;boton.disabled=false;}
 }
 async function copiarTextoFactura() {
   const campo = document.getElementById('facOcrTexto');
