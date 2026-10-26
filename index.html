@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -102,6 +101,7 @@ th,td {
 <button onclick="mostrar('inicio')">Inicio</button>
 <button onclick="mostrar('proveedores')">Proveedores</button>
 <button onclick="mostrar('materias')">Materias primas</button>
+<button onclick="mostrar('facturas')">Facturas</button>
  <button onclick="mostrar('recetas')">Recetas</button>
  <button onclick="mostrar('rentabilidad')">Rentabilidad</button>
   <button onclick="salir()">Salir</button>
@@ -111,6 +111,31 @@ th,td {
 <h2>Panel principal</h2>
 <p>Bienvenido a Costos EPA.</p>
 <p>Administración de compras y materias primas.</p>
+</div>
+
+<div id="facturas" class="card oculto">
+<h2>Facturas · revisión de precios</h2>
+<p>Adjuntá una foto o PDF como referencia y cargá los renglones del comprobante. Esta versión no interpreta automáticamente la imagen ni guarda el archivo en Supabase.</p>
+<div class="fila">
+<label>Comprobante (foto o PDF)<input id="facArchivo" type="file" accept="image/*,application/pdf" onchange="previsualizarFactura()"></label>
+<label>Proveedor<input id="facProveedor" placeholder="Nombre del proveedor"></label>
+<label>Fecha<input id="facFecha" type="date"></label>
+</div>
+<p id="facArchivoEstado"></p>
+<div id="facVista"></div>
+<h3>Nuevo renglón</h3>
+<div class="fila">
+<label>Materia prima<select id="facMateria"></select></label>
+<label>Precio por unidad base ($)<input id="facPrecio" type="number" min="0.0001" step="0.0001" placeholder="Ej.: 3100"></label>
+</div>
+<label><input id="facImpuesto" type="checkbox" style="width:auto"> Precio ingresado incluye IVA recuperable (separarlo antes de aprobar)</label>
+<p>Ingresá el costo con el criterio contable que corresponda. Si el precio incluye IVA recuperable, calculá primero el importe neto. No se realiza conversión automática de impuestos.</p>
+<button onclick="agregarRenglonFactura()">Agregar a revisión</button>
+<h3>Precios pendientes de aprobación</h3>
+<div class="tabla"><table><thead><tr><th>Materia prima</th><th>Unidad</th><th>Costo actual</th><th>Costo propuesto</th><th>Acciones</th></tr></thead><tbody id="facPendientes"></tbody></table></div>
+<p id="facAviso"></p>
+<button onclick="aprobarFactura()">Aprobar y actualizar precios</button>
+<p><small>La aprobación modifica únicamente <code>costo_unitario</code> de las materias primas elegidas. No cambia stock, recetas ni proveedores. Guardá el comprobante original por separado.</small></p>
 </div>
 
 <div id="recetas" class="card oculto">
@@ -287,7 +312,7 @@ function mensaje(texto, error=false) {
 }
 
 function mostrar(seccion) {
-["inicio","proveedores","materias","recetas","rentabilidad"].forEach(id => {
+["inicio","proveedores","materias","recetas","rentabilidad","facturas"].forEach(id => {
     document.getElementById(id).classList.toggle(
       "oculto", id !== seccion
     );
@@ -295,6 +320,7 @@ function mostrar(seccion) {
 
   if (seccion === "proveedores") cargarProveedores();
 if (seccion === "materias") cargarMaterias();
+if (seccion === "facturas") cargarMateriasFactura();
 if (seccion === "recetas") {
   cargarRecetas();
   cargarOpcionesIngredientes();
@@ -867,6 +893,69 @@ async function cambiarPrecioProducto(nombre) {
   const {error:e}=await db.from("productos_venta").update({precio_venta:precio}).eq("id",data[0].id);
   if (e) return mensaje("Error: " + e.message,true);
   mensaje("Precio actualizado.");await cargarRentabilidad();
+}
+
+// Módulo de revisión: sin OCR ni almacenamiento de archivos en esta etapa.
+let materiasFactura = [];
+let pendientesFactura = [];
+let urlFactura = null;
+async function cargarMateriasFactura() {
+  const {data,error} = await db.from('materias_primas').select('id,nombre,unidad_base,costo_unitario').order('nombre').range(0,999);
+  if (error) return mensaje('No se pudieron cargar las materias primas: '+error.message,true);
+  materiasFactura=data || [];
+  const sel=document.getElementById('facMateria');sel.replaceChildren();
+  for(const m of materiasFactura){const o=document.createElement('option');o.value=m.id;o.textContent=m.nombre+' ('+m.unidad_base+')';sel.appendChild(o);}
+  dibujarPendientesFactura();
+}
+function previsualizarFactura(){
+  const f=document.getElementById('facArchivo').files[0];
+  const vista=document.getElementById('facVista');vista.replaceChildren();
+  if(urlFactura){URL.revokeObjectURL(urlFactura);urlFactura=null;}
+  if(!f)return;
+  if(!(f.type.startsWith('image/')||f.type==='application/pdf')){document.getElementById('facArchivoEstado').textContent='Elegí una imagen o PDF.';return;}
+  urlFactura=URL.createObjectURL(f);
+  const el=document.createElement(f.type==='application/pdf'?'iframe':'img');el.src=urlFactura;
+  el.style.maxWidth='100%';el.style.width='100%';el.style.height=f.type==='application/pdf'?'420px':'auto';
+  el.style.maxHeight='520px';el.style.objectFit='contain';el.title='Vista previa del comprobante';vista.appendChild(el);
+  document.getElementById('facArchivoEstado').textContent='Archivo seleccionado: '+f.name+' (solo vista previa local).';
+}
+function agregarRenglonFactura(){
+  const id=Number(document.getElementById('facMateria').value);
+  const costo=Number(document.getElementById('facPrecio').value);
+  const m=materiasFactura.find(x=>x.id===id);
+  const aviso=document.getElementById('facAviso');
+  if(!m||!Number.isFinite(costo)||costo<=0){aviso.textContent='Elegí una materia prima e ingresá un precio válido.';return;}
+  if(document.getElementById('facImpuesto').checked){aviso.textContent='Primero convertí el precio al costo neto correspondiente y desmarcá la casilla de IVA.';return;}
+  pendientesFactura=pendientesFactura.filter(x=>x.id!==id);
+  pendientesFactura.push({...m,nuevo:costo});
+  document.getElementById('facPrecio').value='';aviso.textContent='Precio agregado a revisión.';
+  dibujarPendientesFactura();
+}
+function dibujarPendientesFactura(){
+  const tb=document.getElementById('facPendientes');tb.replaceChildren();
+  for(const m of pendientesFactura){
+    const tr=document.createElement('tr');
+    for(const val of [m.nombre,m.unidad_base,formatoDinero(m.costo_unitario),formatoDinero(m.nuevo)]){
+      const td=document.createElement('td');td.textContent=val;tr.appendChild(td);
+    }
+    const td=document.createElement('td');const b=document.createElement('button');b.textContent='Quitar';
+    b.onclick=()=>{pendientesFactura=pendientesFactura.filter(x=>x.id!==m.id);dibujarPendientesFactura();};
+    td.appendChild(b);tr.appendChild(td);tb.appendChild(tr);
+  }
+}
+async function aprobarFactura(){
+  const aviso=document.getElementById('facAviso');
+  if(!pendientesFactura.length){aviso.textContent='No hay precios pendientes.';return;}
+  if(!confirm('¿Actualizar '+pendientesFactura.length+' precios? Esta acción cambia los costos de las recetas asociadas.'))return;
+  let exitos=0;
+  for(const m of [...pendientesFactura]){
+    const {data,error}=await db.from('materias_primas').update({costo_unitario:m.nuevo})
+      .eq('id',m.id).eq('costo_unitario',m.costo_unitario).select('id');
+    if(error||!data?.length){aviso.textContent='Se actualizaron '+exitos+' precios. Se detuvo en '+m.nombre+' por error o cambio simultáneo. Revisá antes de reintentar.';await cargarMateriasFactura();return;}
+    exitos++;pendientesFactura=pendientesFactura.filter(x=>x.id!==m.id);
+  }
+  aviso.textContent='Se actualizaron '+exitos+' precios correctamente. El comprobante NO quedó guardado en la base de datos.';
+  await cargarMateriasFactura();
 }
 
 iniciarAplicacion();
