@@ -127,7 +127,7 @@ th,td {
 <div style="margin:16px 0;padding:14px;border:1px solid #d6e0e7;border-radius:9px;background:#f8fafb">
 <h3>Lectura automática de la fotografía (OCR)</h3>
 <div style="padding:12px;margin:10px 0;border:1px solid #ccd3d9;border-radius:8px;background:white">
-<strong>Seleccionar zona de productos (V5)</strong>
+<strong>Seleccionar zona de productos (V6)</strong>
 <p style="margin:8px 0">Elegí una foto arriba. Arrastrá con el mouse sobre la imagen para marcar únicamente la tabla de productos. Después presioná <strong>Usar zona seleccionada</strong> y leé la factura. También podés volver a la imagen completa.</p>
 <canvas id="facRecorteCanvas" style="display:none;width:100%;max-width:820px;height:auto;touch-action:none;cursor:crosshair;border:1px solid #b8c8d4"></canvas>
 <div><button type="button" id="facRecortarBtn" onclick="aplicarRecorteFactura()" disabled>Usar zona seleccionada</button>
@@ -144,7 +144,7 @@ th,td {
 <p><small>La lectura OCR prueba varias preparaciones de la imagen y permite comparar resultados. La selección automática se basa en la confianza estimada por OCR, no garantiza que los importes sean correctos. Tesseract.js descarga componentes desde internet. No interpreta de forma confiable descuentos, bultos, unidades ni IVA: comprobá el costo final por unidad base antes de agregarlo a revisión. Los PDF pueden verse, pero no se leen con OCR en esta versión.</small></p>
 </div>
 <div style="margin:16px 0;padding:14px;border:1px solid #d6e0e7;border-radius:9px;background:#f8fafb">
-<h3>Interpretar productos reconocidos (V5)</h3>
+<h3>Interpretar productos reconocidos (V6)</h3>
 <p>Después del OCR, presioná <strong>Detectar renglones</strong>. Corregí cada producto, su cantidad, presentación, precio, descuento e IVA según la factura. Los importes no se extraen automáticamente porque el OCR puede mezclar columnas.</p>
 <button type="button" onclick="detectarRenglonesV5()">Detectar renglones</button>
 <p id="facV5Estado" role="status"></p>
@@ -160,7 +160,8 @@ th,td {
 <button onclick="agregarRenglonFactura()">Agregar a revisión</button>
 <h3>Precios pendientes de aprobación</h3>
 <div class="tabla"><table><thead><tr><th>Materia prima</th><th>Unidad</th><th>Costo actual</th><th>Costo propuesto</th><th>Acciones</th></tr></thead><tbody id="facPendientes"></tbody></table></div>
-<p id="facAviso"></p>
+<p id="facAviso" role="status"></p>
+<p><small><strong>V6:</strong> las marcas se conservan como descripción de origen en la revisión. Si dos renglones corresponden al mismo ingrediente, se agrupan en un único precio propuesto. Si sus costos difieren, debés elegir cuál aplicar; no se promedian automáticamente.</small></p>
 <button onclick="aprobarFactura()">Aprobar y actualizar precios</button>
 <p><small>La aprobación modifica únicamente <code>costo_unitario</code> de las materias primas elegidas. No cambia stock, recetas ni proveedores. Guardá el comprobante original por separado.</small></p>
 </div>
@@ -1166,6 +1167,19 @@ function detectarRenglonesV5(){
   const norm=normalizarV5(linea);
   const coincidencias=materiasFactura.filter(m=>{const n=normalizarV5(m.nombre);return n.length>3 && norm.includes(n);}).sort((a,b)=>b.nombre.length-a.nombre.length);
   if(coincidencias.length===1)select.value=String(coincidencias[0].id);
+  // Equivalencias de marca limitadas y explícitas: no se confunden tipos de harina.
+  if(!select.value){
+    const alias=[
+      [/\bharina\s*0{4}\b/,/^harina 0000$/],
+      [/\bharina\s*0{3}\b/,/^harina 000$/],
+      [/\bazucar\s+impalpable\b/,/^azucar impalpable$/]
+    ];
+    for(const [patron,objetivo] of alias){
+      if(!patron.test(norm))continue;
+      const opciones=materiasFactura.filter(m=>objetivo.test(normalizarV5(m.nombre)));
+      if(opciones.length===1){select.value=String(opciones[0].id);break;}
+    }
+  }
   etiqueta.appendChild(select);caja.appendChild(etiqueta);
   const fila=document.createElement('div');fila.style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px';
   const campos=[['Bultos','bultos','1'],['Unidades base por bulto','contenido',''],['Precio neto por bulto ($)','precio',''],['Descuento (%)','descuento','0'],['IVA (%)','iva','21']];
@@ -1188,6 +1202,7 @@ function detectarRenglonesV5(){
 // Módulo de revisión de precios: no almacena comprobantes en esta etapa.
 let materiasFactura = [];
 let pendientesFactura = [];
+let origenRenglonV6 = '';
 let urlFactura = null;
 async function cargarMateriasFactura() {
   const {data,error} = await db.from('materias_primas').select('id,nombre,unidad_base,costo_unitario').order('nombre').range(0,999);
@@ -1217,9 +1232,11 @@ function agregarRenglonFactura(){
   const m=materiasFactura.find(x=>x.id===id);
   const aviso=document.getElementById('facAviso');
   if(!m||!Number.isFinite(costo)||costo<=0){aviso.textContent='Elegí una materia prima e ingresá un precio válido.';return;}
-  if(document.getElementById('facImpuesto').checked){aviso.textContent='Primero convertí el precio al costo neto correspondiente y desmarcá la casilla de IVA.';return;}
+  const existente=pendientesFactura.find(x=>x.id===id);
+  if(existente && !confirm('Ya hay un precio pendiente para '+m.nombre+'.\nActual: '+formatoDinero(existente.nuevo)+'\nNuevo: '+formatoDinero(costo)+'\n¿Reemplazar el precio pendiente por el nuevo?'))return;
   pendientesFactura=pendientesFactura.filter(x=>x.id!==id);
-  pendientesFactura.push({...m,nuevo:costo});
+  pendientesFactura.push({...m,nuevo:costo,origen:origenRenglonV6||'Carga manual'});
+  origenRenglonV6='';
   document.getElementById('facPrecio').value='';aviso.textContent='Precio agregado a revisión.';
   dibujarPendientesFactura();
 }
@@ -1232,13 +1249,14 @@ function dibujarPendientesFactura(){
     }
     const td=document.createElement('td');const b=document.createElement('button');b.textContent='Quitar';
     b.onclick=()=>{pendientesFactura=pendientesFactura.filter(x=>x.id!==m.id);dibujarPendientesFactura();};
+    if(m.origen){const detalle=document.createElement('div');detalle.style='font-size:12px;color:#536579;max-width:260px;overflow-wrap:anywhere';detalle.textContent='Factura: '+m.origen;td.appendChild(detalle);}
     td.appendChild(b);tr.appendChild(td);tb.appendChild(tr);
   }
 }
 async function aprobarFactura(){
   const aviso=document.getElementById('facAviso');
   if(!pendientesFactura.length){aviso.textContent='No hay precios pendientes.';return;}
-  if(!confirm('¿Actualizar '+pendientesFactura.length+' precios? Esta acción cambia los costos de las recetas asociadas.'))return;
+  if(!confirm('¿Actualizar '+pendientesFactura.length+' ingredientes agrupados? Se modificará su costo_unitario con IVA incluido y se recalcularán los costos de las recetas asociadas. No se guardarán comprobantes ni stock.'))return;
   let exitos=0;
   for(const m of [...pendientesFactura]){
     const {data,error}=await db.from('materias_primas').update({costo_unitario:m.nuevo})
