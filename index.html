@@ -115,7 +115,7 @@ th,td {
 </div>
 
 <div id="facturas" class="card oculto">
-<h2>Facturas · compras e historial (V7)</h2>
+<h2>Facturas · compras e historial (V8)</h2>
 <p>Adjuntá una foto JPG o PNG y usá el reconocimiento de texto. Revisá siempre el resultado: los precios y las cantidades pueden leerse incorrectamente. Los archivos no se guardan en Supabase.</p>
 <div class="fila">
 <label>Comprobante (foto o PDF)<input id="facArchivo" type="file" accept="image/*,application/pdf" onchange="previsualizarFactura()"></label>
@@ -152,6 +152,7 @@ th,td {
 <p><small>El cálculo supone precio neto por bulto, descuento sobre el neto y luego IVA. Verificá qué representa cada importe en la factura. No incluye percepciones. Ningún valor se envía a Supabase hasta que lo agregues a revisión y apruebes explícitamente.</small></p>
 </div>
 <h3>Nuevo renglón</h3>
+<label>Descripción original del producto en la factura<input id="facDescripcionOriginal" maxlength="500" placeholder="Ej.: AZUCAR IMPALPABLE X 10 KG PRINWEY"></label>
 <div class="fila">
 <label>Materia prima<select id="facMateria"></select></label>
 <label>Precio por unidad base ($)<input id="facPrecio" type="number" min="0.0001" step="0.0001" placeholder="Ej.: 3100"></label>
@@ -164,7 +165,20 @@ th,td {
 <p><small><strong>V7:</strong> las marcas se conservan como descripción de origen en la revisión. Si dos renglones corresponden al mismo ingrediente, se agrupan en un único precio propuesto. Si sus costos difieren, debés elegir cuál aplicar; no se promedian automáticamente.</small></p>
 <button onclick="aprobarFactura()">Aprobar y actualizar precios</button>
 <p><small>La aprobación guarda el historial de los renglones revisados y solo actualiza el precio si la fecha de factura es igual o posterior a la última fecha registrada. No modifica stock ni recetas. La imagen original no se almacena.</small></p>
-<p id="facV7Info">Para activar el historial, ejecutá primero la migración SQL V7 adjunta.</p>
+<p id="facV7Info">El historial utiliza los registros de compras de V7 ya existentes en Supabase.</p>
+<div style="margin-top:24px;border-top:1px solid #d6e0e7;padding-top:16px">
+<h3>Historial de compras (V8)</h3>
+<p>Consultá las compras guardadas, incluidas las que no modificaron el costo por ser anteriores a una factura más reciente. Las descripciones provienen de lo registrado al aprobar cada compra.</p>
+<div class="fila">
+<label>Buscar ingrediente, proveedor o descripción<input id="histBuscar" placeholder="Ej.: Prinwey, Diamante, harina" oninput="filtrarHistorialV8()"></label>
+<label>Desde<input id="histDesde" type="date" onchange="cargarHistorialV8()"></label>
+<label>Hasta<input id="histHasta" type="date" onchange="cargarHistorialV8()"></label>
+</div>
+<button type="button" onclick="cargarHistorialV8()">Actualizar historial</button>
+<p id="histEstado" role="status"></p>
+<div class="tabla"><table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Ingrediente</th><th>Descripción de factura</th><th>Costo por unidad</th><th>Resultado</th></tr></thead><tbody id="histCuerpo"></tbody></table></div>
+<button type="button" id="histMas" onclick="cargarHistorialV8(true)" style="display:none">Ver más compras</button>
+</div>
 </div>
 
 <div id="recetas" class="card oculto">
@@ -349,7 +363,7 @@ function mostrar(seccion) {
 
   if (seccion === "proveedores") cargarProveedores();
 if (seccion === "materias") cargarMaterias();
-if (seccion === "facturas") cargarMateriasFactura();
+if (seccion === "facturas") { cargarMateriasFactura(); cargarHistorialV8(); }
 if (seccion === "recetas") {
   cargarRecetas();
   cargarOpcionesIngredientes();
@@ -1196,6 +1210,8 @@ function detectarRenglonesV5(){
    if(!Number.isFinite(costo)||costo<=0){resultado.textContent='No se pudo calcular el costo.';return;}
    document.getElementById('facMateria').value=String(m.id);
    document.getElementById('facPrecio').value=costo.toFixed(4);
+    document.getElementById('facDescripcionOriginal').value=descripcion.value.trim();
+    origenRenglonV6=descripcion.value.trim();
    resultado.textContent='Costo propuesto: $'+costo.toFixed(4)+' por '+m.unidad_base+'. Revisá el cálculo y presioná «Agregar a revisión» en Nuevo renglón. No se guardó nada.';
   };caja.appendChild(calcular);destino.appendChild(caja);
  });
@@ -1238,8 +1254,9 @@ function agregarRenglonFactura(){
   const existente=pendientesFactura.find(x=>x.id===id);
   if(existente && !confirm('Ya hay un precio pendiente para '+m.nombre+'.\nActual: '+formatoDinero(existente.nuevo)+'\nNuevo: '+formatoDinero(costo)+'\n¿Reemplazar el precio pendiente por el nuevo?'))return;
   pendientesFactura=pendientesFactura.filter(x=>x.id!==id);
-  pendientesFactura.push({...m,nuevo:costo,origen:origenRenglonV6||'Carga manual',fechaFactura:fecha});
+  pendientesFactura.push({...m,nuevo:costo,origen:document.getElementById('facDescripcionOriginal').value.trim()||origenRenglonV6||'Carga manual',fechaFactura:fecha});
   origenRenglonV6='';
+  document.getElementById('facDescripcionOriginal').value='';
   document.getElementById('facPrecio').value='';aviso.textContent='Precio agregado a revisión.';
   dibujarPendientesFactura();
 }
@@ -1288,9 +1305,51 @@ async function aprobarFactura(){
     const historicos=(data||[]).length-aplicados;
     aviso.textContent='Se registraron '+(data||[]).length+' compras. Precios actualizados: '+aplicados+'. Compras históricas sin reemplazar precio: '+historicos+'.';
     await cargarMateriasFactura();
+    await cargarHistorialV8();
   }catch(e){
     aviso.textContent='No se guardó el lote: '+(e.message||String(e))+'. Verificá que ejecutaste la migración V7 y volvé a intentar.';
   }finally{if(boton)boton.disabled=false;}
+}
+
+
+// V8: consulta de solo lectura del historial existente. No modifica recetas ni stock.
+let historialV8 = [];
+let historialPaginaV8 = 0;
+const historialTamanoV8 = 100;
+let historialSolicitudV8 = 0;
+function filtrarHistorialV8(){
+  const filtro=normalizarV5(document.getElementById('histBuscar').value);
+  const cuerpo=document.getElementById('histCuerpo');cuerpo.replaceChildren();
+  const materias=new Map(materiasFactura.map(m=>[String(m.id),m]));
+  const filas=historialV8.filter(h=>normalizarV5([h.proveedor,h.descripcion_original,materias.get(String(h.materia_prima_id))?.nombre].join(' ')).includes(filtro));
+  for(const h of filas){
+    const tr=document.createElement('tr');
+    const materia=materias.get(String(h.materia_prima_id));
+    const valores=[h.fecha,h.proveedor,materia?.nombre||'ID '+h.materia_prima_id,h.descripcion_original||'Sin descripción',formatoDinero(h.costo_unitario)+' / '+(materia?.unidad_base||'unidad'),h.precio_actualizado?'Actualizó precio':'Solo historial'];
+    valores.forEach(v=>{const td=document.createElement('td');td.textContent=v??'';tr.appendChild(td);});
+    cuerpo.appendChild(tr);
+  }
+  document.getElementById('histEstado').textContent='Mostrando '+filas.length+' de '+historialV8.length+' compras cargadas.';
+}
+async function cargarHistorialV8(mas=false){
+  const solicitud=++historialSolicitudV8;
+  const estado=document.getElementById('histEstado');
+  if(!mas){historialPaginaV8=0;historialV8=[];}
+  estado.textContent='Consultando compras guardadas...';
+  let consulta=db.from('epa_historial_compras')
+    .select('id,fecha,proveedor,materia_prima_id,descripcion_original,costo_unitario,precio_actualizado')
+    .order('id',{ascending:false})
+    .range(historialPaginaV8*historialTamanoV8,(historialPaginaV8+1)*historialTamanoV8-1);
+  const desde=document.getElementById('histDesde').value;
+  const hasta=document.getElementById('histHasta').value;
+  if(desde)consulta=consulta.gte('fecha',desde);
+  if(hasta)consulta=consulta.lte('fecha',hasta);
+  const {data,error}=await consulta;
+  if(solicitud!==historialSolicitudV8)return;
+  if(error){estado.textContent='No se pudo consultar el historial: '+error.message+'. Revisá los permisos de lectura de epa_historial_compras.';return;}
+  historialV8.push(...(data||[]));historialPaginaV8++;
+  filtrarHistorialV8();
+  document.getElementById('histMas').style.display=(data||[]).length===historialTamanoV8?'inline-block':'none';
 }
 
 iniciarAplicacion();
