@@ -115,7 +115,7 @@ th,td {
 </div>
 
 <div id="facturas" class="card oculto">
-<h2>Facturas · revisión de precios</h2>
+<h2>Facturas · compras e historial (V7)</h2>
 <p>Adjuntá una foto JPG o PNG y usá el reconocimiento de texto. Revisá siempre el resultado: los precios y las cantidades pueden leerse incorrectamente. Los archivos no se guardan en Supabase.</p>
 <div class="fila">
 <label>Comprobante (foto o PDF)<input id="facArchivo" type="file" accept="image/*,application/pdf" onchange="previsualizarFactura()"></label>
@@ -161,9 +161,10 @@ th,td {
 <h3>Precios pendientes de aprobación</h3>
 <div class="tabla"><table><thead><tr><th>Materia prima</th><th>Unidad</th><th>Costo actual</th><th>Costo propuesto</th><th>Acciones</th></tr></thead><tbody id="facPendientes"></tbody></table></div>
 <p id="facAviso" role="status"></p>
-<p><small><strong>V6:</strong> las marcas se conservan como descripción de origen en la revisión. Si dos renglones corresponden al mismo ingrediente, se agrupan en un único precio propuesto. Si sus costos difieren, debés elegir cuál aplicar; no se promedian automáticamente.</small></p>
+<p><small><strong>V7:</strong> las marcas se conservan como descripción de origen en la revisión. Si dos renglones corresponden al mismo ingrediente, se agrupan en un único precio propuesto. Si sus costos difieren, debés elegir cuál aplicar; no se promedian automáticamente.</small></p>
 <button onclick="aprobarFactura()">Aprobar y actualizar precios</button>
-<p><small>La aprobación modifica únicamente <code>costo_unitario</code> de las materias primas elegidas. No cambia stock, recetas ni proveedores. Guardá el comprobante original por separado.</small></p>
+<p><small>La aprobación guarda el historial de los renglones revisados y solo actualiza el precio si la fecha de factura es igual o posterior a la última fecha registrada. No modifica stock ni recetas. La imagen original no se almacena.</small></p>
+<p id="facV7Info">Para activar el historial, ejecutá primero la migración SQL V7 adjunta.</p>
 </div>
 
 <div id="recetas" class="card oculto">
@@ -1232,10 +1233,12 @@ function agregarRenglonFactura(){
   const m=materiasFactura.find(x=>x.id===id);
   const aviso=document.getElementById('facAviso');
   if(!m||!Number.isFinite(costo)||costo<=0){aviso.textContent='Elegí una materia prima e ingresá un precio válido.';return;}
+  const fecha=document.getElementById('facFecha').value;
+  if(!fecha){aviso.textContent='Ingresá primero la fecha de la factura.';return;}
   const existente=pendientesFactura.find(x=>x.id===id);
   if(existente && !confirm('Ya hay un precio pendiente para '+m.nombre+'.\nActual: '+formatoDinero(existente.nuevo)+'\nNuevo: '+formatoDinero(costo)+'\n¿Reemplazar el precio pendiente por el nuevo?'))return;
   pendientesFactura=pendientesFactura.filter(x=>x.id!==id);
-  pendientesFactura.push({...m,nuevo:costo,origen:origenRenglonV6||'Carga manual'});
+  pendientesFactura.push({...m,nuevo:costo,origen:origenRenglonV6||'Carga manual',fechaFactura:fecha});
   origenRenglonV6='';
   document.getElementById('facPrecio').value='';aviso.textContent='Precio agregado a revisión.';
   dibujarPendientesFactura();
@@ -1256,16 +1259,38 @@ function dibujarPendientesFactura(){
 async function aprobarFactura(){
   const aviso=document.getElementById('facAviso');
   if(!pendientesFactura.length){aviso.textContent='No hay precios pendientes.';return;}
-  if(!confirm('¿Actualizar '+pendientesFactura.length+' ingredientes agrupados? Se modificará su costo_unitario con IVA incluido y se recalcularán los costos de las recetas asociadas. No se guardarán comprobantes ni stock.'))return;
-  let exitos=0;
-  for(const m of [...pendientesFactura]){
-    const {data,error}=await db.from('materias_primas').update({costo_unitario:m.nuevo})
-      .eq('id',m.id).eq('costo_unitario',m.costo_unitario).select('id');
-    if(error||!data?.length){aviso.textContent='Se actualizaron '+exitos+' precios. Se detuvo en '+m.nombre+' por error o cambio simultáneo. Revisá antes de reintentar.';await cargarMateriasFactura();return;}
-    exitos++;pendientesFactura=pendientesFactura.filter(x=>x.id!==m.id);
+  const fecha=document.getElementById('facFecha').value;
+  const proveedor=document.getElementById('facProveedor').value.trim();
+  if(!fecha || !proveedor){aviso.textContent='Completá proveedor y fecha antes de aprobar.';return;}
+  if(pendientesFactura.some(x=>x.fechaFactura!==fecha)){
+    aviso.textContent='La fecha cambió desde que agregaste precios. Quitá y volvé a agregar los renglones para evitar mezclas.';return;
   }
-  aviso.textContent='Se actualizaron '+exitos+' precios correctamente. El comprobante NO quedó guardado en la base de datos.';
-  await cargarMateriasFactura();
+  const resumen=pendientesFactura.map(m=>m.nombre+' → '+formatoDinero(m.nuevo)+' / '+m.unidad_base).join('\n');
+  if(!confirm('Registrar '+pendientesFactura.length+' compras del '+fecha+' ('+proveedor+')?\n\n'+resumen+'\n\nLas facturas anteriores al último costo se registran, pero NO modifican el precio actual.'))return;
+  const boton=Array.from(document.querySelectorAll('button')).find(b=>b.getAttribute('onclick')==='aprobarFactura()');
+  if(boton)boton.disabled=true;
+  aviso.textContent='Guardando compras y comprobando fechas...';
+  try{
+    const lote=crypto.randomUUID();
+    const items=pendientesFactura.map(m=>({
+      materia_prima_id:m.id,
+      descripcion:m.origen||m.nombre,
+      costo_unitario:m.nuevo,
+      unidad_base:m.unidad_base
+    }));
+    const {data,error}=await db.rpc('epa_registrar_compras_v7',{
+      p_lote:lote,p_fecha:fecha,p_proveedor:proveedor,p_items:items
+    });
+    if(error)throw error;
+    pendientesFactura=[];
+    dibujarPendientesFactura();
+    const aplicados=(data||[]).filter(x=>x.precio_actualizado).length;
+    const historicos=(data||[]).length-aplicados;
+    aviso.textContent='Se registraron '+(data||[]).length+' compras. Precios actualizados: '+aplicados+'. Compras históricas sin reemplazar precio: '+historicos+'.';
+    await cargarMateriasFactura();
+  }catch(e){
+    aviso.textContent='No se guardó el lote: '+(e.message||String(e))+'. Verificá que ejecutaste la migración V7 y volvé a intentar.';
+  }finally{if(boton)boton.disabled=false;}
 }
 
 iniciarAplicacion();
