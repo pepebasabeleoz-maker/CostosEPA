@@ -1203,19 +1203,7 @@ function candidatosV9() {
   return resultado.slice(0, 60);
 }
 
-  const resultado = [];
-
-  for (const texto of textos) {
-    for (const linea of candidatosV5(texto)) {
-      const clave = normalizarV5(linea);
-      if (!clave || vistos.has(clave)) continue;
-      vistos.add(clave);
-      resultado.push(linea);
-    }
-  }
-
-  return resultado.slice(0, 60);
-}
+  
 
 function identificarMateriaV9(linea) {
   const texto = normalizarV5(linea);
