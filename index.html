@@ -1193,9 +1193,11 @@ function candidatosV9() {
       // una identificación específica segura.
       const identificador = variedad || clave.replace(/\b\d+(?:[.,]\d+)?\b/g, '').replace(/\s+/g, ' ').trim();
 
-      if (!identificador || vistos.has(identificador)) continue;
+      const materia = identificarMateriaV9(linea);
+const claveUnica = materia ? `materia-${materia.id}` : identificador;
+if (!claveUnica || vistos.has(claveUnica)) continue;
 
-      vistos.add(identificador);
+     vistos.add(claveUnica);
       resultado.push(linea);
     }
   }
