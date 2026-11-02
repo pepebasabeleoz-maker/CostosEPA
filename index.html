@@ -1165,9 +1165,107 @@ function candidatosV5(texto){
  const patron=/(harina|azucar|manteca|margarina|queso|aceite|chocolate|frambuesa|crema|leche|cacao|almendra|pistacho|frutilla|banana|tomate|huevo|levadura|sal\b|dulce)/i;
  return lineas.filter(x=>patron.test(normalizarV5(x)) && x.length<220).slice(0,30);
 }
+/* V9: recuperación de productos y coincidencias seguras.
+   No modifica datos en Supabase. */
+
+function candidatosV9() {
+  const textos = [
+    document.getElementById('facOcrTexto').value,
+    ...variantesOCR.map(v => v.texto)
+  ];
+
+  
+  const resultado = [];
+  const vistos = new Set();
+
+  for (const texto of textos) {
+    for (const linea of candidatosV5(texto)) {
+      const clave = normalizarV5(linea);
+
+      // Diferenciar variedades específicas de ingredientes.
+      const variedad =
+        /\bharina\s*0{4}\b/.test(clave) ? 'harina 0000' :
+        /\bharina\s*0{3}\b/.test(clave) ? 'harina 000' :
+        /\bazucar\s+impalpable\b/.test(clave) ? 'azucar impalpable' :
+        null;
+
+      // Conservar el texto completo cuando no haya
+      // una identificación específica segura.
+      const identificador = variedad || clave;
+
+      if (!identificador || vistos.has(identificador)) continue;
+
+      vistos.add(identificador);
+      resultado.push(linea);
+    }
+  }
+
+  return resultado.slice(0, 60);
+}
+
+  const resultado = [];
+
+  for (const texto of textos) {
+    for (const linea of candidatosV5(texto)) {
+      const clave = normalizarV5(linea);
+      if (!clave || vistos.has(clave)) continue;
+      vistos.add(clave);
+      resultado.push(linea);
+    }
+  }
+
+  return resultado.slice(0, 60);
+}
+
+function identificarMateriaV9(linea) {
+  const texto = normalizarV5(linea);
+
+  // Identificar variedades específicas antes que genéricas.
+  let objetivo = null;
+
+  if (/\bharina\s*0{4}\b/.test(texto)) {
+    objetivo = 'harina 0000';
+  } else if (/\bharina\s*0{3}\b/.test(texto)) {
+    objetivo = 'harina 000';
+  } else if (/\bazucar\s+impalpable\b/.test(texto)) {
+    objetivo = 'azucar impalpable';
+  }
+
+  if (objetivo) {
+    const opciones = materiasFactura.filter(m =>
+      normalizarV5(m.nombre) === objetivo
+    );
+
+    return opciones.length === 1 ? opciones[0] : null;
+  }
+
+  // No asignar una variedad genérica cuando el texto
+  // contiene una variedad específica desconocida.
+  if (/\bharina\b/.test(texto) &&
+      /\bharina\s+[0-9]+\b/.test(texto)) return null;
+
+  if (/\bazucar\b/.test(texto) &&
+      !/\bazucar(?:\s|$)/.test(texto)) return null;
+
+  const coincidencias = materiasFactura.filter(m => {
+    const nombre = normalizarV5(m.nombre);
+    return nombre.length > 3 &&
+      new RegExp(
+        '(^| )' +
+        nombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '( |$)'
+      ).test(texto);
+  });
+
+  // Ante ambigüedad, exigir selección manual.
+  return coincidencias.length === 1
+    ? coincidencias[0]
+    : null;
+}
+
 function detectarRenglonesV5(){
  const texto=document.getElementById('facOcrTexto').value;
- const lineas=candidatosV5(texto), destino=document.getElementById('facV5Renglones');destino.replaceChildren();
+const lineas=candidatosV9(), destino=document.getElementById('facV5Renglones');destino.replaceChildren();
  const estado=document.getElementById('facV5Estado');
  if(!lineas.length){estado.textContent='No se detectaron productos claros. Podés corregir el texto OCR y volver a intentar.';return;}
  estado.textContent='Se detectaron '+lineas.length+' posibles renglones. Revisá todos los datos contra la factura.';
@@ -1179,22 +1277,12 @@ function detectarRenglonesV5(){
   const select=document.createElement('select');select.style='width:100%;margin:6px 0';
   const vacio=document.createElement('option');vacio.value='';vacio.textContent='Elegir materia prima (obligatorio)';select.appendChild(vacio);
   for(const m of materiasFactura){const op=document.createElement('option');op.value=m.id;op.textContent=m.nombre+' ('+m.unidad_base+')';select.appendChild(op);}
-  const norm=normalizarV5(linea);
-  const coincidencias=materiasFactura.filter(m=>{const n=normalizarV5(m.nombre);return n.length>3 && norm.includes(n);}).sort((a,b)=>b.nombre.length-a.nombre.length);
-  if(coincidencias.length===1)select.value=String(coincidencias[0].id);
-  // Equivalencias de marca limitadas y explícitas: no se confunden tipos de harina.
-  if(!select.value){
-    const alias=[
-      [/\bharina\s*0{4}\b/,/^harina 0000$/],
-      [/\bharina\s*0{3}\b/,/^harina 000$/],
-      [/\bazucar\s+impalpable\b/,/^azucar impalpable$/]
-    ];
-    for(const [patron,objetivo] of alias){
-      if(!patron.test(norm))continue;
-      const opciones=materiasFactura.filter(m=>objetivo.test(normalizarV5(m.nombre)));
-      if(opciones.length===1){select.value=String(opciones[0].id);break;}
-    }
-  }
+  
+const materiaDetectada = identificarMateriaV9(linea);
+if (materiaDetectada) {
+  select.value = String(materiaDetectada.id);
+}
+
   etiqueta.appendChild(select);caja.appendChild(etiqueta);
   const fila=document.createElement('div');fila.style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px';
   const campos=[['Bultos','bultos','1'],['Unidades base por bulto','contenido',''],['Precio neto por bulto ($)','precio',''],['Descuento (%)','descuento','0'],['IVA (%)','iva','21']];
