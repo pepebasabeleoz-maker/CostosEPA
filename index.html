@@ -1186,7 +1186,7 @@ function candidatosV9() {
       const variedad =
         /\bharina\s*0{4}\b/.test(clave) ? 'harina 0000' :
         /\bharina\s*0{3}\b/.test(clave) ? 'harina 000' :
-        /\bazucar\s+impalpable\b/.test(clave) ? 'azucar impalpable' :
+        /\bazucar\s+(?:impalpable|infalpable|inpalpable)\b/.test(clave) ? 'azucar impalpable' :
         null;
 
       // Conservar el texto completo cuando no haya
@@ -1217,7 +1217,7 @@ function identificarMateriaV9(linea) {
     objetivo = 'harina 0000';
   } else if (/\bharina\s*0{3}\b/.test(texto)) {
     objetivo = 'harina 000';
-  } else if (/\bazucar\s+(?:impalpable|infalpable)\b/.test(texto)) {
+ } else if (/\bazucar\s+(?:impalpable|infalpable|inpalpable)\b/.test(texto)) {
     objetivo = 'azucar impalpable';
   }
 
