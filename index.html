@@ -1191,7 +1191,7 @@ function candidatosV9() {
 
       // Conservar el texto completo cuando no haya
       // una identificación específica segura.
-      const identificador = variedad || clave;
+      const identificador = variedad || clave.replace(/\b\d+(?:[.,]\d+)?\b/g, '').replace(/\s+/g, ' ').trim();
 
       if (!identificador || vistos.has(identificador)) continue;
 
