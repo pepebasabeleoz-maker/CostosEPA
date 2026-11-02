@@ -1215,7 +1215,7 @@ function identificarMateriaV9(linea) {
     objetivo = 'harina 0000';
   } else if (/\bharina\s*0{3}\b/.test(texto)) {
     objetivo = 'harina 000';
-  } else if (/\bazucar\s+impalpable\b/.test(texto)) {
+  } else if (/\bazucar\s+(?:impalpable|infalpable)\b/.test(texto)) {
     objetivo = 'azucar impalpable';
   }
 
