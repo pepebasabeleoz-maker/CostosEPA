@@ -1194,7 +1194,9 @@ function candidatosV9() {
       const identificador = variedad || clave.replace(/\b\d+(?:[.,]\d+)?\b/g, '').replace(/\s+/g, ' ').trim();
 
       const materia = identificarMateriaV9(linea);
-const claveUnica = materia ? `materia-${materia.id}` : identificador;
+const claveUnica = materia
+  ? `materia-${materia.id}`
+  : `texto-${identificador}`;
 if (!claveUnica || vistos.has(claveUnica)) continue;
 
      vistos.add(claveUnica);
