@@ -1297,16 +1297,18 @@ const datosOCR = (() => {
     .replace(/\s+/g, ' ');
 
   const cantidad = texto.match(
-    /(?:^|\s)(\d+[.,]\d{3})\s+(?:\(\*\)\s*)?(?:HARINA|AZUCAR|AZÚCAR)/
+   /(?:^|\s)(\d+[.,]\d{3}|\d+)\s+(?:\(\*\)\s*)?(?:HARINA|AZUCAR|AZÚCAR)/
   );
 
   const presentacion = texto.match(
-    /X\s*(\d+(?:[.,]\d+)?)\s*KG\b/
+  /[X×]\s*(\d+(?:[.,]\d+)?)\s*K[G6]\b/i
   );
 
-  const iva = texto.match(
-    /\b(10[.,]50|21[.,]00)\s*%/
-  );
+  
+const iva = texto.match(
+  /\b(10[.,]5(?:0)?|21(?:[.,]0{1,2})?)\s*%/
+);
+
 
   if (cantidad) {
     const n = Number(cantidad[1].replace(',', '.'));
