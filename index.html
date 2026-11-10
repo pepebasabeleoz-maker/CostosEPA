@@ -1169,6 +1169,7 @@ function candidatosV5(texto){
    No modifica datos en Supabase. */
 
 
+
 function candidatosV9() {
   const textos = [
     document.getElementById('facOcrTexto').value,
@@ -1185,17 +1186,35 @@ function candidatosV9() {
     })).filter(item => item.clave)
   );
 
-  // Elegir la lectura que recuperó más productos.
-  // No mezclar variantes, para evitar duplicados.
+  // Elegir la lectura con mayor cantidad de
+  // productos distintos, no de líneas repetidas.
+  const evaluar = lectura => {
+    const claves = new Set();
+    for (const item of lectura) {
+      claves.add(item.clave);
+    }
+    return claves.size;
+  };
+
   const mejor = lecturas.reduce(
     (actual, lectura) =>
-      lectura.length > actual.length ? lectura : actual,
+      evaluar(lectura) > evaluar(actual) ? lectura : actual,
     []
   );
 
-  // Conservar todos los renglones de esa lectura,
-  // incluso si un producto aparece dos veces.
-  return mejor.map(item => item.linea).slice(0, 60);
+  // Quitar solamente líneas idénticas.
+  // Conservar compras con diferente marca,
+  // presentación o descripción.
+  const vistos = new Set();
+  const resultado = [];
+
+  for (const item of mejor) {
+    if (vistos.has(item.clave)) continue;
+    vistos.add(item.clave);
+    resultado.push(item.linea);
+  }
+
+  return resultado.slice(0, 60);
 }
 
 
