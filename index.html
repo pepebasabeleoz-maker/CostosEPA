@@ -1291,42 +1291,52 @@ if (materiaDetectada) {
   const campos=[['Bultos','bultos','1'],['Unidades base por bulto','contenido',''],['Precio neto por bulto ($)','precio',''],['Descuento (%)','descuento','0'],['IVA (%)','iva','21']];
   const entradas={};
   
+
 const datosOCR = (() => {
   const texto = descripcion.value
     .toUpperCase()
     .replace(/\s+/g, ' ');
 
+  const numero = valor => Number(
+    valor.replace(/\./g, '').replace(',', '.')
+  );
+
   const cantidad = texto.match(
-   /(?:^|\s)(\d+[.,]\d{3}|\d+)\s+(?:\(\*\)\s*)?(?:HARINA|AZUCAR|AZÚCAR)/
+    /(?:^|\s)(\d+(?:[.,]\d{3})|\d+)(?:[.,]0{2,3})?\s*(?:\(\*\)|\(\+\))?\s*(?=HARINA|AZUCAR|AZÚCAR)/
   );
 
   const presentacion = texto.match(
-  /[X×]\s*(\d+(?:[.,]\d+)?)\s*K[G6]\b/i
+    /X\s*(\d+(?:[.,]\d+)?)\s*KG\b/i
   );
 
-  
-const iva = texto.match(
-  /\b(10[.,]5(?:0)?|21(?:[.,]0{1,2})?)\s*%/
-);
-
+  const iva = texto.match(
+    /\b(10[.,]5|21(?:[.,]0{1,2})?)\s*%/
+  );
 
   if (cantidad) {
-    const n = Number(cantidad[1].replace(',', '.'));
+    const n = numero(cantidad[1]);
     if (Number.isFinite(n) && n > 0) {
       campos[0][2] = String(n);
     }
   }
 
   if (presentacion) {
-    campos[1][2] = presentacion[1].replace(',', '.');
+    const n = numero(presentacion[1]);
+    if (Number.isFinite(n) && n > 0) {
+      campos[1][2] = String(n);
+    }
   }
 
   if (iva) {
     campos[4][2] = iva[1].replace(',', '.');
   }
 
+  // Precio y descuento solo se completan si
+  // pueden identificarse sin ambigüedad.
+  // Por seguridad permanecen para revisión manual.
   return true;
 })();
+
 for(const [nombre,clave,valor] of campos){const l=document.createElement('label');l.textContent=nombre;const inp=document.createElement('input');inp.type='number';inp.min='0';inp.step='any';inp.value=valor;inp.style='width:100%';l.appendChild(inp);fila.appendChild(l);entradas[clave]=inp;}
   caja.appendChild(fila);
   const resultado=document.createElement('p');caja.appendChild(resultado);
